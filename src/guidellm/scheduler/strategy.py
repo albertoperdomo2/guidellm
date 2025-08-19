@@ -389,6 +389,8 @@ class AsyncConstantStrategy(ThroughputStrategy):
 
         :return: A generator that yields timestamps for request scheduling.
         """
+        periodic_burst_interval = 60.0  # 1 minute
+
         start_time = time.time()
         constant_increment = 1.0 / self.rate
 
@@ -403,10 +405,21 @@ class AsyncConstantStrategy(ThroughputStrategy):
             start_time += constant_increment
 
         counter = 0
+        last_burst_time = start_time
 
-        # continue with constant rate after bursting
+        # continue with constant rate and additional bursts
         while True:
-            yield start_time + constant_increment * counter
+            current_time = start_time + constant_increment * counter
+
+            if periodic_burst_interval is not None and current_time - last_burst_time >= periodic_burst_interval:
+                # send burst
+                burst_count = math.floor(self.rate)
+                for _ in range(burst_count):
+                    yield current_time
+
+                last_burst_time = current_time
+
+            yield current_time
             counter += 1
 
 
