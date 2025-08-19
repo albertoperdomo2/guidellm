@@ -160,6 +160,7 @@ def benchmark():
         "For rate-type=sweep, this is the number of benchmarks it runs in the sweep. "
         "For rate-type=concurrent, this is the number of concurrent requests. "
         "For rate-type=async,constant,poisson, this is the rate requests per second. "
+        "For rate-type=incremental, this must not be set (use --start-rate and --increment-factor instead). "
         "For rate-type=synchronous,throughput, this must not be set."
     ),
 )
@@ -247,6 +248,16 @@ def benchmark():
     type=int,
     help="The random seed to use for benchmarking to ensure reproducibility.",
 )
+@click.option(
+    "--start-rate",
+    type=float,
+    help="The initial rate for incremental rate type in requests per second.",
+)
+@click.option(
+    "--increment-factor",
+    type=float,
+    help="The factor by which to increase the rate over time for incremental rate type.",
+)
 def run(
     scenario,
     target,
@@ -271,6 +282,8 @@ def run(
     output_extras,
     output_sampling,
     random_seed,
+    start_rate,
+    increment_factor,
 ):
     click_ctx = click.get_current_context()
 
@@ -293,6 +306,8 @@ def run(
         cooldown_percent=cooldown_percent,
         output_sampling=output_sampling,
         random_seed=random_seed,
+        start_rate=start_rate,
+        increment_factor=increment_factor,
     )
 
     try:
