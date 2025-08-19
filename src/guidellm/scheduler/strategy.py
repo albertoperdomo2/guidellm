@@ -27,7 +27,9 @@ __all__ = [
 ]
 
 
-StrategyType = Literal["synchronous", "concurrent", "throughput", "constant", "poisson", "incremental"]
+StrategyType = Literal[
+    "synchronous", "concurrent", "throughput", "constant", "poisson", "incremental"
+]
 
 
 class SchedulingStrategy(StandardBaseModel):
@@ -426,7 +428,7 @@ class AsyncConstantStrategy(ThroughputStrategy):
 
             elif incremental_mode == "exponential":
                 elapsed_time = current_time - start_time
-                current_rate = self.rate * (exponential_base ** elapsed_time)
+                current_rate = self.rate * (exponential_base**elapsed_time)
                 increment = 1.0 / current_rate
                 current_time += increment
 
@@ -588,7 +590,11 @@ def strategy_display_str(strategy: Union[StrategyType, SchedulingStrategy]) -> s
     elif strategy_type in ("constant", "poisson"):
         rate = f"@{strategy_instance.rate:.2f}" if strategy_instance else "@#.##"  # type: ignore[attr-defined]
     elif strategy_type == "incremental":
-        rate = f"@{strategy_instance.start_rate:.2f}+{strategy_instance.increment_factor:.2f}" if strategy_instance else "@#.##+#.##"
+        rate = (
+            f"@{strategy_instance.start_rate:.2f}+{strategy_instance.increment_factor:.2f}"
+            if strategy_instance
+            else "@#.##+#.##"
+        )
     else:
         rate = ""
 

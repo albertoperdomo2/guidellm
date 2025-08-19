@@ -29,7 +29,9 @@ __all__ = [
     "create_profile",
 ]
 
-ProfileType = Literal["synchronous", "concurrent", "throughput", "async", "sweep", "incremental"]
+ProfileType = Literal[
+    "synchronous", "concurrent", "throughput", "async", "sweep", "incremental"
+]
 
 
 class Profile(StandardBaseModel):
@@ -430,6 +432,8 @@ def create_profile(
     rate_type: Union[StrategyType, ProfileType],
     rate: Optional[Union[float, Sequence[float]]],
     random_seed: int = 42,
+    start_rate: Optional[float] = None,
+    increment_factor: Optional[float] = None,
     **kwargs,
 ) -> "Profile":
     if rate_type == "synchronous":
@@ -470,9 +474,15 @@ def create_profile(
         )
 
     if rate_type == "incremental":
+        if start_rate is None or increment_factor is None:
+            raise ValueError(
+                "start_rate and increment_factor are required for incremental profile"
+            )
         return IncrementalProfile.from_standard_args(
             rate_type=rate_type,
             rate=rate,
+            start_rate=start_rate,
+            increment_factor=increment_factor,
             **kwargs,
         )
 
