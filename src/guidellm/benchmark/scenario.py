@@ -104,3 +104,4 @@ class GenerativeTextScenario(Scenario):
     random_seed: int = 42
     start_rate: Optional[PositiveFloat] = None
     increment_factor: Optional[PositiveFloat] = None
+    increment_limit: Optional[PositiveInt] = None

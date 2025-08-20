@@ -258,6 +258,11 @@ def benchmark():
     type=float,
     help="The factor by which to increase the rate over time for incremental rate type.",
 )
+@click.option(
+    "--increment-limit",
+    type=int,
+    help="The factor after which the load remains constant for incremental rate type.",
+)
 def run(
     scenario,
     target,
@@ -284,6 +289,7 @@ def run(
     random_seed,
     start_rate,
     increment_factor,
+    increment_limit,
 ):
     click_ctx = click.get_current_context()
 
@@ -308,6 +314,7 @@ def run(
         random_seed=random_seed,
         start_rate=start_rate,
         increment_factor=increment_factor,
+        increment_limit=increment_limit,
     )
 
     try:

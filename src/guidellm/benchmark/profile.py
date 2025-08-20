@@ -375,6 +375,9 @@ class IncrementalProfile(ThroughputProfile):
     increment_factor: float = Field(
         description="The factor by which to increase the rate over time.",
     )
+    increment_limit: int = Field(
+        description="The factor after which the load remains constant for incremental rate type.",
+    )
     initial_burst: bool = Field(
         default=True,
         description=(
@@ -394,6 +397,7 @@ class IncrementalProfile(ThroughputProfile):
         return AsyncIncrementalStrategy(
             start_rate=self.start_rate,
             increment_factor=self.increment_factor,
+            increment_limit=self.increment_limit,
             initial_burst=self.initial_burst,
             max_concurrency=self.max_concurrency,
         )
@@ -404,6 +408,7 @@ class IncrementalProfile(ThroughputProfile):
         rate: Optional[Union[float, Sequence[float]]],
         start_rate: float,
         increment_factor: float,
+        increment_limit: int,
         **kwargs,
     ) -> "IncrementalProfile":
         if rate_type != "incremental":
@@ -421,9 +426,13 @@ class IncrementalProfile(ThroughputProfile):
         if increment_factor <= 0:
             raise ValueError("increment_factor must be a positive number.")
 
+        if increment_limit <= 0:
+            raise ValueError("increment_limit must be a positive integer.")
+
         return IncrementalProfile(
             start_rate=start_rate,
             increment_factor=increment_factor,
+            increment_limit=increment_limit,
             **kwargs,
         )
 
@@ -434,6 +443,7 @@ def create_profile(
     random_seed: int = 42,
     start_rate: Optional[float] = None,
     increment_factor: Optional[float] = None,
+    increment_limit: Optional[int] = None,
     **kwargs,
 ) -> "Profile":
     if rate_type == "synchronous":
@@ -483,6 +493,7 @@ def create_profile(
             rate=rate,
             start_rate=start_rate,
             increment_factor=increment_factor,
+            increment_limit=increment_limit,
             **kwargs,
         )
 

@@ -412,6 +412,7 @@ class AsyncConstantStrategy(ThroughputStrategy):
             yield start_time + constant_increment * counter
             counter += 1
 
+
 class AsyncPoissonStrategy(ThroughputStrategy):
     """
     A class representing an asynchronous Poisson scheduling strategy.
@@ -497,6 +498,8 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
         requests per second. This must be a positive float.
     :param increment_factor: The factor by which to increase the rate over time.
         This must be a positive float greater than 0.
+    :param increment_limit: The factor that limits the max rate.
+        This must be a positive integer greater than 0.
     :param initial_burst: True to send an initial burst of requests
         (math.floor(self.start_rate)) to reach target rate.
         False to not send an initial burst.
@@ -514,6 +517,13 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
         description=(
             "The factor by which to increase the rate over time. "
             "This must be a positive float greater than 0."
+        ),
+        gt=0,
+    )
+    increment_limit: int = Field(
+        description=(
+            "The factor that limits the max rate."
+            "This must be a positive integer greater than 0."
         ),
         gt=0,
     )
@@ -536,6 +546,7 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
         :return: A generator that yields timestamps for request scheduling.
         """
         start_time = time.time()
+        constant_increment = 1.0 / self.increment_limit
 
         # handle bursts first to get to the desired rate
         if self.initial_burst:
@@ -546,12 +557,18 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
                 yield start_time
 
         current_time = start_time
+        current_rate = 0
         counter = 0
 
         # continue with incremental rate
         while True:
             yield current_time
             counter += 1
+
+            # if limit reached, continue at constant rate
+            if self.increment_limit and current_rate >= self.increment_limit:
+                current_time = start_time + constant_increment * counter
+                continue
 
             # calculate the current rate based on elapsed time
             elapsed_time = current_time - start_time
