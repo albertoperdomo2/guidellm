@@ -61,7 +61,7 @@ async def benchmark_generative_text(
     random_seed: int,
     start_rate: Optional[float] = None,
     increment_factor: Optional[float] = None,
-    increment_limit: Optional[int] = None,
+    rate_limit: Optional[int] = None,
     show_progress: bool = True,
     show_progress_scheduler_stats: bool = False,
     output_console: bool = True,
@@ -105,7 +105,7 @@ async def benchmark_generative_text(
         rate=rate,
         start_rate=start_rate,
         increment_factor=increment_factor,
-        increment_limit=increment_limit,
+        rate_limit=rate_limit,
     )
     benchmarker = GenerativeBenchmarker(
         backend=backend,

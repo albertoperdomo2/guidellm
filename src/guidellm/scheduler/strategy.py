@@ -498,7 +498,7 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
         requests per second. This must be a positive float.
     :param increment_factor: The factor by which to increase the rate over time.
         This must be a positive float greater than 0.
-    :param increment_limit: The factor that limits the max rate.
+    :param rate_limit: The factor that limits the max rate.
         This must be a positive integer greater than 0.
     :param initial_burst: True to send an initial burst of requests
         (math.floor(self.start_rate)) to reach target rate.
@@ -520,7 +520,7 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
         ),
         gt=0,
     )
-    increment_limit: int = Field(
+    rate_limit: int = Field(
         description=(
             "The factor that limits the max rate."
             "This must be a positive integer greater than 0."
@@ -546,7 +546,6 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
         :return: A generator that yields timestamps for request scheduling.
         """
         start_time = time.time()
-        constant_increment = 1.0 / self.increment_limit
 
         # handle bursts first to get to the desired rate
         if self.initial_burst:
@@ -557,7 +556,6 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
                 yield start_time
 
         current_time = start_time
-        current_rate = 0
         counter = 0
 
         # continue with incremental rate
@@ -565,15 +563,16 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
             yield current_time
             counter += 1
 
-            # if limit reached, continue at constant rate
-            if self.increment_limit and current_rate >= self.increment_limit:
-                current_time = start_time + constant_increment * counter
-                continue
-
-            # calculate the current rate based on elapsed time
+            # decide which rate should be next
             elapsed_time = current_time - start_time
-            current_rate = self.start_rate + (self.increment_factor * elapsed_time)
-            increment = 1.0 / current_rate
+            next_rate = self.start_rate + (self.increment_factor * elapsed_time)
+
+            # cap at rate limit if specified
+            if self.rate_limit and next_rate >= self.rate_limit:
+                increment = 1.0 / self.rate_limit
+            else:
+                increment = 1.0 / next_rate
+
             current_time += increment
 
 
