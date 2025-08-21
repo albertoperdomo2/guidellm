@@ -8,6 +8,7 @@ from guidellm.benchmark.profile import (
     AsyncProfile,
     ConcurrentProfile,
     IncrementalProfile,
+    BurstsProfile,
     Profile,
     SweepProfile,
     SynchronousProfile,
@@ -23,6 +24,7 @@ from guidellm.request import (
     RequestLoaderDescription,
 )
 from guidellm.scheduler import (
+    AsyncBurstsStrategy,
     AsyncConstantStrategy,
     AsyncIncrementalStrategy,
     AsyncPoissonStrategy,
@@ -58,6 +60,7 @@ class BenchmarkArgs(StandardBaseModel):
     profile: Union[
         AsyncProfile,
         SweepProfile,
+        BurstsProfile,
         ConcurrentProfile,
         ThroughputProfile,
         IncrementalProfile,
@@ -76,6 +79,7 @@ class BenchmarkArgs(StandardBaseModel):
         )
     )
     strategy: Union[
+        AsyncBurstsStrategy,
         ConcurrentStrategy,
         SchedulingStrategy,
         ThroughputStrategy,

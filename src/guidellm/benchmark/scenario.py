@@ -105,3 +105,5 @@ class GenerativeTextScenario(Scenario):
     start_rate: Optional[PositiveFloat] = None
     increment_factor: Optional[PositiveFloat] = None
     rate_limit: Optional[PositiveInt] = None
+    burst_period: Optional[PositiveFloat] = None
+    burst_size: Optional[PositiveInt] = None

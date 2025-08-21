@@ -7,6 +7,7 @@ from pydantic import Field, computed_field
 from guidellm.config import settings
 from guidellm.objects import StandardBaseModel
 from guidellm.scheduler import (
+    AsyncBurstsStrategy,
     AsyncConstantStrategy,
     AsyncIncrementalStrategy,
     AsyncPoissonStrategy,
@@ -18,6 +19,7 @@ from guidellm.scheduler import (
 )
 
 __all__ = [
+    "BurstsProfile",
     "AsyncProfile",
     "ConcurrentProfile",
     "IncrementalProfile",
@@ -30,7 +32,7 @@ __all__ = [
 ]
 
 ProfileType = Literal[
-    "synchronous", "concurrent", "throughput", "async", "sweep", "incremental"
+    "synchronous", "concurrent", "throughput", "async", "sweep", "incremental", "bursts"
 ]
 
 
@@ -437,6 +439,69 @@ class IncrementalProfile(ThroughputProfile):
         )
 
 
+class BurstsProfile(ThroughputProfile):
+    type_: Literal["bursts"] = "bursts"
+    rate: Union[float, Sequence[float]] = Field(
+        description="The rate of requests per second to use.",
+    )
+    burst_period: float = Field(
+        description="The rate at which the load bursts will be sent for bursts rate type.",
+    )
+    burst_size: float = Field(
+        description="The size of the bursts in RPS for bursts rate type.",
+    )
+    initial_burst: bool = Field(
+        default=True,
+        description=(
+            "True to send an initial burst of requests (math.floor(self.start_rate)) "
+            "to reach target rate. False to not send an initial burst."
+        ),
+    )
+
+    @property
+    def strategy_types(self) -> list[StrategyType]:
+        return [self.type_]
+
+    def next_strategy(self) -> Optional[SchedulingStrategy]:
+        if self.completed_strategies >= 1:
+            return None
+
+        return AsyncBurstsStrategy(
+            rate=self.rate,
+            burst_period=self.burst_period,
+            burst_size=self.burst_size,
+            initial_burst=self.initial_burst,
+            max_concurrency=self.max_concurrency,
+        )
+
+    @staticmethod
+    def from_standard_args(
+        rate_type: Union[StrategyType, ProfileType],
+        rate: Optional[Union[float, Sequence[float]]],
+        burst_period: Optional[float] = None,
+        burst_size: Optional[int] = None,
+        **kwargs,
+    ) -> "BurstsProfile":
+        if rate_type != "bursts":
+            raise ValueError("Rate type must be 'bursts' for bursts profile.")
+
+        if not rate:
+            raise ValueError("Rate must be provided for async profile.")
+
+        if burst_period <= 0:
+            raise ValueError("burst_period must be a positive number.")
+
+        if burst_size <= 0:
+            raise ValueError("burst_size must be a positive integer.")
+
+        return BurstsProfile(
+            rate=rate,
+            burst_period=burst_period,
+            burst_size=burst_size,
+            **kwargs,
+        )
+
+
 def create_profile(
     rate_type: Union[StrategyType, ProfileType],
     rate: Optional[Union[float, Sequence[float]]],
@@ -444,6 +509,8 @@ def create_profile(
     start_rate: Optional[float] = None,
     increment_factor: Optional[float] = None,
     rate_limit: Optional[int] = None,
+    burst_period: Optional[float] = None,
+    burst_size: Optional[int] = None,
     **kwargs,
 ) -> "Profile":
     if rate_type == "synchronous":
@@ -494,6 +561,19 @@ def create_profile(
             start_rate=start_rate,
             increment_factor=increment_factor,
             rate_limit=rate_limit,
+            **kwargs,
+        )
+
+    if rate_type == "bursts":
+        if burst_period is None or burst_size is None:
+            raise ValueError(
+                "burst_period and burst_size are required for bursts profile"
+            )
+        return BurstsProfile.from_standard_args(
+            rate_type=rate_type,
+            rate=rate,
+            burst_period=burst_period,
+            burst_size=burst_size,
             **kwargs,
         )
 

@@ -6,6 +6,7 @@ from .result import (
 )
 from .scheduler import Scheduler
 from .strategy import (
+    AsyncBurstsStrategy,
     AsyncConstantStrategy,
     AsyncIncrementalStrategy,
     AsyncPoissonStrategy,
@@ -28,6 +29,7 @@ from .worker import (
 )
 
 __all__ = [
+    "AsyncBurstsStrategy",
     "AsyncConstantStrategy",
     "AsyncIncrementalStrategy",
     "AsyncPoissonStrategy",

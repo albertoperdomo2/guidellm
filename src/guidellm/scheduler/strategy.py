@@ -15,6 +15,7 @@ from guidellm.config import settings
 from guidellm.objects import StandardBaseModel
 
 __all__ = [
+    "AsyncBurstsStrategy",
     "AsyncConstantStrategy",
     "AsyncIncrementalStrategy",
     "AsyncPoissonStrategy",
@@ -28,7 +29,13 @@ __all__ = [
 
 
 StrategyType = Literal[
-    "synchronous", "concurrent", "throughput", "constant", "poisson", "incremental"
+    "synchronous",
+    "concurrent",
+    "throughput",
+    "constant",
+    "poisson",
+    "incremental",
+    "bursts",
 ]
 
 
@@ -576,6 +583,85 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
             current_time += increment
 
 
+class AsyncBurstsStrategy(ThroughputStrategy):
+    """
+    A class representing an asynchronous burst scheduling strategy.
+    This strategy schedules requests asynchronously starting at a base rate
+    and periodically sends a burst.
+    If initial_burst is set, it will send an initial burst of math.floor(rate)
+    requests to reach the target rate.
+    It inherits from the `ThroughputStrategy` base class and
+    implements the `request_times` method to provide the specific
+    behavior for asynchronous incremental scheduling.
+
+    :param type_: The bursts StrategyType to schedule requests asynchronously.
+    :param rate: The constant rate at which to schedule requests in
+        requests per second. This must be a positive float.
+    :param burst_period: The period at which bursts will be sent.
+        This must be a positive float greater than 0.
+    :param burst_size: The factor that sets the burst size.
+        This must be a positive integer greater than 0.
+    :param initial_burst: True to send an initial burst of requests
+        (math.floor(self.rate)) to reach target rate.
+        False to not send an initial burst.
+    """
+
+    type_: Literal["bursts"] = "bursts"
+    rate: Union[float, Sequence[float]] = Field(
+        description="The rate of requests per second to use.",
+    )
+    burst_period: float = Field(
+        description="The rate at which the load bursts will be sent for bursts rate type.",
+    )
+    burst_size: float = Field(
+        description="The size of the bursts in RPS for bursts rate type.",
+    )
+    initial_burst: bool = Field(
+        default=True,
+        description=(
+            "True to send an initial burst of requests (math.floor(self.start_rate)) "
+            "to reach target rate. False to not send an initial burst."
+        ),
+    )
+
+    def request_times(self) -> Generator[float, None, None]:
+        """
+        A generator that yields timestamps for when requests should be sent.
+        This method schedules requests asynchronously starting at a base rate
+        and periodically sends request bursts over time.
+        If initial_burst is set, it will send an initial burst of requests
+        to reach the target rate.
+
+        :return: A generator that yields timestamps for request scheduling.
+        """
+        start_time = time.time()
+        constant_increment = 1.0 / self.rate
+
+        # handle bursts first to get to the desired rate
+        if self.initial_burst:
+            # send an initial burst equal to the start rate
+            # to reach the target rate
+            burst_count = math.floor(self.start_rate)
+            for _ in range(burst_count):
+                yield start_time
+
+        counter = 0
+        last_burst_time = start_time
+
+        # continue with constant rate and send bursts
+        while True:
+            current_time = start_time + constant_increment * counter
+
+            if current_time - last_burst_time >= self.burst_period:
+                for _ in range(self.burst_size):
+                    yield current_time
+
+                last_burst_time = current_time
+
+            yield current_time
+            counter += 1
+
+
 def strategy_display_str(strategy: Union[StrategyType, SchedulingStrategy]) -> str:
     strategy_type = strategy if isinstance(strategy, str) else strategy.type_
     strategy_instance = strategy if isinstance(strategy, SchedulingStrategy) else None
@@ -589,6 +675,12 @@ def strategy_display_str(strategy: Union[StrategyType, SchedulingStrategy]) -> s
             f"@{strategy_instance.start_rate:.2f}+{strategy_instance.increment_factor:.2f}"
             if strategy_instance
             else "@#.##+#.##"
+        )
+    elif strategy_type == "bursts":
+        rate = (
+            f"@{strategy_instance.rate:.2f}+burst:{strategy_instance.burst_size}@{strategy_instance.burst_period}s"
+            if strategy_instance
+            else "@#.##+burst:#.##@#.##s"
         )
     else:
         rate = ""

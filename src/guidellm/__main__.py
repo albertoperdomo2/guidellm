@@ -161,6 +161,7 @@ def benchmark():
         "For rate-type=concurrent, this is the number of concurrent requests. "
         "For rate-type=async,constant,poisson, this is the rate requests per second. "
         "For rate-type=incremental, this must not be set (use --start-rate and --increment-factor instead). "
+        "For rate-type=bursts, this is the rate requests per second. "
         "For rate-type=synchronous,throughput, this must not be set."
     ),
 )
@@ -263,6 +264,16 @@ def benchmark():
     type=int,
     help="The rate after which the load remains constant for incremental rate type.",
 )
+@click.option(
+    "--burst-period",
+    type=float,
+    help="The rate at which the load bursts will be sent for bursts rate type.",
+)
+@click.option(
+    "--burst-size",
+    type=int,
+    help="The size of the bursts in RPS for bursts rate type.",
+)
 def run(
     scenario,
     target,
@@ -290,6 +301,8 @@ def run(
     start_rate,
     increment_factor,
     rate_limit,
+    burst_period,
+    burst_size,
 ):
     click_ctx = click.get_current_context()
 
@@ -315,6 +328,8 @@ def run(
         start_rate=start_rate,
         increment_factor=increment_factor,
         rate_limit=rate_limit,
+        burst_period=burst_period,
+        burst_size=burst_size,
     )
 
     try:
