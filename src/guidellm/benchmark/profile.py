@@ -460,14 +460,17 @@ class BurstsProfile(ThroughputProfile):
 
     @property
     def strategy_types(self) -> list[StrategyType]:
-        return [self.type_]
+        num_strategies = len(self.rate) if isinstance(self.rate, Sequence) else 1
+        return [self.type_] * num_strategies
 
     def next_strategy(self) -> Optional[SchedulingStrategy]:
-        if self.completed_strategies >= 1:
+        rate = self.rate if isinstance(self.rate, Sequence) else [self.rate]
+
+        if self.completed_strategies >= len(rate):
             return None
 
         return AsyncBurstsStrategy(
-            rate=self.rate,
+            rate=rate[self.completed_strategies],
             burst_period=self.burst_period,
             burst_size=self.burst_size,
             initial_burst=self.initial_burst,
