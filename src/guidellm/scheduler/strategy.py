@@ -607,8 +607,12 @@ class AsyncBurstsStrategy(ThroughputStrategy):
     """
 
     type_: Literal["bursts"] = "bursts"
-    rate: Union[float, Sequence[float]] = Field(
-        description="The rate of requests per second to use.",
+    rate: float = Field(
+        description=(
+            "The rate at which to schedule requests asynchronously in "
+            "requests per second. This must be a positive float."
+        ),
+        gt=0,
     )
     burst_period: float = Field(
         description="The rate at which the load bursts will be sent for bursts rate type.",
