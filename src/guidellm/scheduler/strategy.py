@@ -617,13 +617,14 @@ class AsyncBurstsStrategy(ThroughputStrategy):
     burst_period: float = Field(
         description="The rate at which the load bursts will be sent for bursts rate type.",
     )
-    burst_size: float = Field(
+    burst_size: int = Field(
         description="The size of the bursts in RPS for bursts rate type.",
+        gt=0,
     )
     initial_burst: bool = Field(
         default=True,
         description=(
-            "True to send an initial burst of requests (math.floor(self.start_rate)) "
+            "True to send an initial burst of requests (math.floor(self.rate)) "
             "to reach target rate. False to not send an initial burst."
         ),
     )
@@ -643,9 +644,9 @@ class AsyncBurstsStrategy(ThroughputStrategy):
 
         # handle bursts first to get to the desired rate
         if self.initial_burst:
-            # send an initial burst equal to the start rate
+            # send an initial burst equal to the rate
             # to reach the target rate
-            burst_count = math.floor(self.start_rate)
+            burst_count = math.floor(self.rate)
             for _ in range(burst_count):
                 yield start_time
 
