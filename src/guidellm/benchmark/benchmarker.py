@@ -192,10 +192,18 @@ class Benchmarker(Generic[AggregatorT, BenchmarkT, RequestT, ResponseT], ABC):
                 limits=strategy_limits,
             )
 
+            # Check if profile has per-strategy duration for this strategy
+            strategy_duration = (
+                profile.get_strategy_duration(current_index)
+                if hasattr(profile, "get_strategy_duration")
+                else None
+            )
+            effective_duration = strategy_duration or max_duration_per_strategy
+
             async for result in self.scheduler.run(
                 scheduling_strategy=scheduling_strategy,
                 max_number=max_number_per_strategy,
-                max_duration=max_duration_per_strategy,
+                max_duration=effective_duration,
             ):
                 if result.type_ == "run_start":
                     yield BenchmarkerResult(

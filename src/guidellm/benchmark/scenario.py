@@ -4,7 +4,14 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, Optional, TypeVar, Union
 
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict
-from pydantic import BeforeValidator, Field, NonNegativeInt, PositiveFloat, PositiveInt
+from pydantic import (
+    BeforeValidator,
+    Field,
+    NonNegativeInt,
+    PositiveFloat,
+    PositiveInt,
+    model_validator,
+)
 from transformers.tokenization_utils_base import (  # type: ignore[import]
     PreTrainedTokenizerBase,
 )
@@ -96,9 +103,23 @@ class GenerativeTextScenario(Scenario):
     rate: Annotated[
         Optional[list[PositiveFloat]], BeforeValidator(parse_float_list)
     ] = None
+    steps: Annotated[
+        Optional[list[PositiveFloat]], BeforeValidator(parse_float_list)
+    ] = None
     max_seconds: Optional[PositiveFloat] = None
     max_requests: Optional[PositiveInt] = None
     warmup_percent: Annotated[Optional[float], Field(gt=0, le=1)] = None
     cooldown_percent: Annotated[Optional[float], Field(gt=0, le=1)] = None
     output_sampling: Optional[NonNegativeInt] = None
     random_seed: int = 42
+
+    @model_validator(mode="after")
+    def validate_rate_steps_consistency(self):
+        """Validate that rate and steps have consistent lengths when both are provided."""
+        if self.rate is not None and self.steps is not None:
+            if len(self.rate) != len(self.steps):
+                raise ValueError(
+                    f"When both rate and steps are provided, they must have the same length. "
+                    f"Got rate with {len(self.rate)} values and steps with {len(self.steps)} values."
+                )
+        return self

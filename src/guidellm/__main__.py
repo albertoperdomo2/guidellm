@@ -164,6 +164,16 @@ def benchmark():
     ),
 )
 @click.option(
+    "--steps",
+    default=GenerativeTextScenario.get_default("steps"),
+    help=(
+        "The duration in seconds for each rate step when using comma-separated rates. "
+        "Can be a single number or a comma-separated list of numbers. "
+        "If provided, must have the same length as --rate and overrides --max-seconds. "
+        "Example: --rate 1,2,3 --steps 10,20,30 runs 10s at 1 RPS, 20s at 2 RPS, 30s at 3 RPS."
+    ),
+)
+@click.option(
     "--max-seconds",
     type=float,
     default=GenerativeTextScenario.get_default("max_seconds"),
@@ -260,6 +270,7 @@ def run(
     data_sampler,
     rate_type,
     rate,
+    steps,
     max_seconds,
     max_requests,
     warmup_percent,
@@ -287,6 +298,7 @@ def run(
         data_sampler=data_sampler,
         rate_type=rate_type,
         rate=rate,
+        steps=steps,
         max_seconds=max_seconds,
         max_requests=max_requests,
         warmup_percent=warmup_percent,

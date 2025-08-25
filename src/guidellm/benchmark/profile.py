@@ -62,6 +62,10 @@ class Profile(StandardBaseModel):
     def next_strategy(self) -> Optional[SchedulingStrategy]:
         return None
 
+    def get_strategy_duration(self, strategy_index: int) -> Optional[float]:
+        """Get the duration for a specific strategy index. Override in subclasses if needed."""
+        return None
+
 
 class SynchronousProfile(Profile):
     type_: Literal["synchronous"] = "synchronous"  # type: ignore[assignment]
@@ -192,6 +196,10 @@ class AsyncProfile(ThroughputProfile):
     rate: Union[float, Sequence[float]] = Field(
         description="The rate of requests per second to use.",
     )
+    steps: Optional[Union[float, Sequence[float]]] = Field(
+        default=None,
+        description="The duration in seconds for each rate step. If provided, must match rate length.",
+    )
     initial_burst: bool = Field(
         default=True,
         description=(
@@ -212,6 +220,17 @@ class AsyncProfile(ThroughputProfile):
         num_strategies = len(self.rate) if isinstance(self.rate, Sequence) else 1
 
         return [self.strategy_type] * num_strategies
+
+    def get_strategy_duration(self, strategy_index: int) -> Optional[float]:
+        """Get the duration for a specific strategy index."""
+        if self.steps is None:
+            return None
+
+        steps = self.steps if isinstance(self.steps, Sequence) else [self.steps]
+        if strategy_index >= len(steps):
+            return None
+
+        return steps[strategy_index]
 
     def next_strategy(self) -> Optional[SchedulingStrategy]:
         rate = self.rate if isinstance(self.rate, Sequence) else [self.rate]
@@ -240,6 +259,7 @@ class AsyncProfile(ThroughputProfile):
         rate_type: Union[StrategyType, ProfileType],
         rate: Optional[Union[float, Sequence[float]]],
         random_seed: int,
+        steps: Optional[Union[float, Sequence[float]]] = None,
         **kwargs,
     ) -> "AsyncProfile":
         if rate_type not in ("async", "constant", "poisson"):
@@ -259,12 +279,30 @@ class AsyncProfile(ThroughputProfile):
                 f"All rate values must be positive numbers, received {rate}"
             )
 
+        # validate steps if provided
+        if steps is not None:
+            if not isinstance(steps, Sequence):
+                steps = [steps]
+
+            if not all(isinstance(s, (float, int)) and s > 0 for s in steps):
+                raise ValueError(
+                    f"All step values must be positive numbers, received {steps}"
+                )
+
+            # ensure steps and rate have the same length
+            if len(rate) != len(steps):
+                raise ValueError(
+                    f"Rate and steps must have the same length. "
+                    f"Got rate with {len(rate)} values and steps with {len(steps)} values."
+                )
+
         if rate_type == "async":
             rate_type = "constant"  # default to constant if not specified
 
         return AsyncProfile(
             strategy_type=rate_type,  # type: ignore[arg-type]
             rate=rate,
+            steps=steps,
             random_seed=random_seed,
             **kwargs,
         )
@@ -366,6 +404,7 @@ class SweepProfile(AsyncProfile):
 def create_profile(
     rate_type: Union[StrategyType, ProfileType],
     rate: Optional[Union[float, Sequence[float]]],
+    steps: Optional[Union[float, Sequence[float]]] = None,
     random_seed: int = 42,
     **kwargs,
 ) -> "Profile":
@@ -394,6 +433,7 @@ def create_profile(
         return AsyncProfile.from_standard_args(
             rate_type=rate_type,
             rate=rate,
+            steps=steps,
             random_seed=random_seed,
             **kwargs,
         )
