@@ -527,10 +527,10 @@ class AsyncIncrementalStrategy(ThroughputStrategy):
         ),
         gt=0,
     )
-    rate_limit: int = Field(
+    rate_limit: float = Field(
         description=(
             "The factor that limits the max rate."
-            "This must be a positive integer greater than 0."
+            "This must be a positive float greater than 0."
         ),
         gt=0,
     )

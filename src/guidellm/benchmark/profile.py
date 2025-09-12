@@ -377,7 +377,7 @@ class IncrementalProfile(ThroughputProfile):
     increment_factor: float = Field(
         description="The factor by which to increase the rate over time.",
     )
-    rate_limit: int = Field(
+    rate_limit: float = Field(
         description="The factor after which the load remains constant for incremental rate type.",
     )
     initial_burst: bool = Field(
@@ -410,7 +410,7 @@ class IncrementalProfile(ThroughputProfile):
         rate: Optional[Union[float, Sequence[float]]],
         start_rate: float,
         increment_factor: float,
-        rate_limit: int,
+        rate_limit: float,
         **kwargs,
     ) -> "IncrementalProfile":
         if rate_type != "incremental":
@@ -429,7 +429,7 @@ class IncrementalProfile(ThroughputProfile):
             raise ValueError("increment_factor must be a positive number.")
 
         if rate_limit <= 0:
-            raise ValueError("rate_limit must be a positive integer.")
+            raise ValueError("rate_limit must be a positive number.")
 
         return IncrementalProfile(
             start_rate=start_rate,
@@ -511,7 +511,7 @@ def create_profile(
     random_seed: int = 42,
     start_rate: Optional[float] = None,
     increment_factor: Optional[float] = None,
-    rate_limit: Optional[int] = None,
+    rate_limit: Optional[float] = None,
     burst_period: Optional[float] = None,
     burst_size: Optional[int] = None,
     **kwargs,

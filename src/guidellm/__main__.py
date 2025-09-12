@@ -261,7 +261,7 @@ def benchmark():
 )
 @click.option(
     "--rate-limit",
-    type=int,
+    type=float,
     help="The rate after which the load remains constant for incremental rate type.",
 )
 @click.option(

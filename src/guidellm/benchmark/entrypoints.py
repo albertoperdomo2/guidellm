@@ -63,7 +63,7 @@ async def benchmark_generative_text(
     increment_factor: Optional[float] = None,
     burst_period: Optional[float] = None,
     burst_size: Optional[int] = None,
-    rate_limit: Optional[int] = None,
+    rate_limit: Optional[float] = None,
     show_progress: bool = True,
     show_progress_scheduler_stats: bool = False,
     output_console: bool = True,
