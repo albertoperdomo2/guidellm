@@ -274,6 +274,11 @@ def benchmark():
     type=int,
     help="The size of the bursts in RPS for bursts rate type.",
 )
+@click.option(
+    "--disable-ssl-verification",
+    is_flag=True,
+    help="Disable SSL certificate verification for HTTPS requests. Use with caution in development only.",
+)
 def run(
     scenario,
     target,
@@ -303,8 +308,15 @@ def run(
     rate_limit,
     burst_period,
     burst_size,
+    disable_ssl_verification,
 ):
     click_ctx = click.get_current_context()
+
+    # Handle SSL verification flag
+    if disable_ssl_verification:
+        if backend_args is None:
+            backend_args = {}
+        backend_args["verify"] = False
 
     overrides = cli_tools.set_if_not_default(
         click_ctx,
