@@ -7,6 +7,8 @@ from pydantic import Field, computed_field
 from guidellm.benchmark.profile import (
     AsyncProfile,
     ConcurrentProfile,
+    IncrementalProfile,
+    BurstsProfile,
     Profile,
     SweepProfile,
     SynchronousProfile,
@@ -22,7 +24,9 @@ from guidellm.request import (
     RequestLoaderDescription,
 )
 from guidellm.scheduler import (
+    AsyncBurstsStrategy,
     AsyncConstantStrategy,
+    AsyncIncrementalStrategy,
     AsyncPoissonStrategy,
     ConcurrentStrategy,
     GenerativeRequestsWorkerDescription,
@@ -56,8 +60,10 @@ class BenchmarkArgs(StandardBaseModel):
     profile: Union[
         AsyncProfile,
         SweepProfile,
+        BurstsProfile,
         ConcurrentProfile,
         ThroughputProfile,
+        IncrementalProfile,
         SynchronousProfile,
         Profile,
     ] = Field(
@@ -73,12 +79,14 @@ class BenchmarkArgs(StandardBaseModel):
         )
     )
     strategy: Union[
+        AsyncBurstsStrategy,
         ConcurrentStrategy,
         SchedulingStrategy,
         ThroughputStrategy,
         SynchronousStrategy,
         AsyncPoissonStrategy,
         AsyncConstantStrategy,
+        AsyncIncrementalStrategy,
         SchedulingStrategy,
     ] = Field(
         description="The scheduling strategy used to run this benchmark. ",

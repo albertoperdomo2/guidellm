@@ -102,3 +102,8 @@ class GenerativeTextScenario(Scenario):
     cooldown_percent: Annotated[Optional[float], Field(gt=0, le=1)] = None
     output_sampling: Optional[NonNegativeInt] = None
     random_seed: int = 42
+    start_rate: Optional[PositiveFloat] = None
+    increment_factor: Optional[PositiveFloat] = None
+    rate_limit: Optional[PositiveFloat] = None
+    burst_period: Optional[PositiveFloat] = None
+    burst_size: Optional[PositiveInt] = None

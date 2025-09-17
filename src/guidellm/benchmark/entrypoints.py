@@ -59,6 +59,11 @@ async def benchmark_generative_text(
     output_extras: Optional[dict[str, Any]],
     output_sampling: Optional[int],
     random_seed: int,
+    start_rate: Optional[float] = None,
+    increment_factor: Optional[float] = None,
+    burst_period: Optional[float] = None,
+    burst_size: Optional[int] = None,
+    rate_limit: Optional[float] = None,
     show_progress: bool = True,
     show_progress_scheduler_stats: bool = False,
     output_console: bool = True,
@@ -97,7 +102,15 @@ async def benchmark_generative_text(
         else f"Created loader with unknown number unique requests from {data}.\n\n"
     )
 
-    profile = create_profile(rate_type=rate_type, rate=rate)
+    profile = create_profile(
+        rate_type=rate_type,
+        rate=rate,
+        start_rate=start_rate,
+        increment_factor=increment_factor,
+        rate_limit=rate_limit,
+        burst_period=burst_period,
+        burst_size=burst_size,
+    )
     benchmarker = GenerativeBenchmarker(
         backend=backend,
         request_loader=request_loader,
