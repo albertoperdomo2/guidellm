@@ -344,6 +344,10 @@ def run(
         burst_size=burst_size,
     )
 
+    # Ensure backend_args with SSL settings are included in overrides
+    if disable_ssl_verification and "backend_args" not in overrides:
+        overrides["backend_args"] = backend_args
+
     try:
         # If a scenario file was specified read from it
         if scenario is None:
