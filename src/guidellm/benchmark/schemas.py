@@ -1840,6 +1840,14 @@ class BenchmarkGenerativeTextArgs(StandardBaseModel):
     rate: float | list[float] | None = Field(
         default=None, description="Request rate(s) for rate-based scheduling"
     )
+    steps_duration: list[int] | None = Field(
+        default=None,
+        description="Duration in seconds for each step (required for steps profile)",
+    )
+    steps_rate: list[float] | None = Field(
+        default=None,
+        description="Request rate for each step in requests/second (required for steps profile)",
+    )
     # Backend configuration
     backend: BackendType | Backend = Field(
         default="openai_http", description="Backend type or instance for execution"

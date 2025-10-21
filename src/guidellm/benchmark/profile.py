@@ -33,6 +33,7 @@ from guidellm.scheduler import (
     ConstraintInitializer,
     ConstraintsInitializerFactory,
     SchedulingStrategy,
+    StepsStrategy,
     StrategyType,
     SynchronousStrategy,
     ThroughputStrategy,
@@ -47,12 +48,15 @@ __all__ = [
     "ConcurrentProfile",
     "Profile",
     "ProfileType",
+    "StepsProfile",
     "SweepProfile",
     "SynchronousProfile",
     "ThroughputProfile",
 ]
 
-ProfileType = Literal["synchronous", "concurrent", "throughput", "async", "sweep"]
+ProfileType = Literal[
+    "synchronous", "concurrent", "throughput", "async", "sweep", "steps"
+]
 
 
 class Profile(
@@ -553,6 +557,86 @@ class AsyncProfile(Profile):
             )
         else:
             raise ValueError(f"Invalid strategy type: {self.strategy_type}")
+
+
+@Profile.register("steps")
+class StepsProfile(Profile):
+    """Multi-step rate execution profile with configurable durations and rates."""
+
+    type_: Literal["steps"] = "steps"  # type: ignore[assignment]
+    steps_duration: list[PositiveInt] = Field(
+        description="Duration in seconds for each step in the load pattern",
+    )
+    steps_rate: list[PositiveFloat] = Field(
+        description="Target rate in requests per second for each step",
+    )
+
+    @classmethod
+    def resolve_args(
+        cls,
+        rate_type: str,
+        rate: list[float] | None,
+        random_seed: int,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        Resolve arguments for steps profile construction.
+
+        :param rate_type: Profile type identifier (ignored)
+        :param rate: Rate parameter (must be None for steps profile)
+        :param random_seed: Random seed (ignored)
+        :param kwargs: Additional arguments including steps_duration and steps_rate
+        :return: Resolved arguments dictionary
+        :raises ValueError: If rate is not None, or if steps parameters are missing/invalid
+        """
+        _ = (rate_type, random_seed)  # unused
+        if rate is not None:
+            raise ValueError("StepsProfile does not accept a rate parameter")
+
+        if "steps_duration" not in kwargs or not kwargs["steps_duration"]:
+            raise ValueError("StepsProfile requires steps_duration parameter")
+
+        if "steps_rate" not in kwargs or not kwargs["steps_rate"]:
+            raise ValueError("StepsProfile requires steps_rate parameter")
+
+        steps_duration = kwargs["steps_duration"]
+        steps_rate = kwargs["steps_rate"]
+
+        if len(steps_duration) != len(steps_rate):
+            raise ValueError("steps_duration and steps_rate must have the same length")
+
+        return {
+            "steps_duration": steps_duration,
+            "steps_rate": steps_rate,
+        }
+
+    @property
+    def strategy_types(self) -> list[StrategyType]:
+        """
+        :return: Single steps strategy type
+        """
+        return [self.type_]
+
+    def next_strategy(
+        self,
+        prev_strategy: SchedulingStrategy | None,
+        prev_benchmark: Benchmark | None,
+    ) -> StepsStrategy | None:
+        """
+        Generate steps strategy or None if already completed.
+
+        :param prev_strategy: Previously completed strategy (unused)
+        :param prev_benchmark: Benchmark results from previous execution (unused)
+        :return: StepsStrategy for first execution, None afterward
+        """
+        _ = (prev_strategy, prev_benchmark)  # unused
+        if len(self.completed_strategies) >= 1:
+            return None
+
+        return StepsStrategy(
+            steps_duration=self.steps_duration,
+            steps_rate=self.steps_rate,
+        )
 
 
 @Profile.register("sweep")

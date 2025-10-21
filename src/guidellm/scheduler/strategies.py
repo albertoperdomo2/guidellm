@@ -28,6 +28,7 @@ __all__ = [
     "AsyncPoissonStrategy",
     "ConcurrentStrategy",
     "SchedulingStrategy",
+    "StepsStrategy",
     "StrategyT",
     "StrategyType",
     "SynchronousStrategy",
@@ -36,7 +37,7 @@ __all__ = [
 
 
 StrategyType = Annotated[
-    Literal["synchronous", "concurrent", "throughput", "constant", "poisson"],
+    Literal["synchronous", "concurrent", "throughput", "constant", "poisson", "steps"],
     "Valid strategy type identifiers for scheduling request patterns",
 ]
 
@@ -517,3 +518,108 @@ class AsyncPoissonStrategy(ThroughputStrategy):
         :param request_info: Completed request metadata (unused)
         """
         _ = request_info  # request_info unused for async poisson strategy
+
+
+@SchedulingStrategy.register("steps")
+class StepsStrategy(ThroughputStrategy):
+    """
+    Multi-step rate scheduling for dynamic load patterns.
+
+    Schedules requests at different rates for different time durations, enabling
+    complex load testing scenarios like ramp-up, steady-state, and ramp-down patterns.
+    Each step specifies a duration and target rate, allowing precise control over
+    request arrival patterns throughout the benchmark execution.
+    """
+
+    type_: Literal["steps"] = "steps"  # type: ignore[assignment]
+    steps_duration: list[int] = Field(
+        description="Duration in seconds for each step in the load pattern",
+    )
+    steps_rate: list[float] = Field(
+        description="Target rate in requests per second for each step",
+    )
+
+    _current_step_index: int = PrivateAttr(0)
+    _step_offsets: list[float] = PrivateAttr(default_factory=list)
+
+    def __str__(self) -> str:
+        """
+        :return: String identifier with step configuration summary
+        """
+        total_duration = sum(self.steps_duration)
+        return f"steps@{len(self.steps_duration)}x{total_duration}s"
+
+    def init_processes_timings(
+        self,
+        worker_count: int,
+        max_concurrency: int,
+        startup_duration: float,
+    ):
+        """
+        Initialize step-specific timing state.
+
+        :param worker_count: Number of worker processes to coordinate
+        :param max_concurrency: Maximum number of concurrent requests allowed
+        :param startup_duration: Duration in seconds for request startup ramping
+        """
+        super().init_processes_timings(worker_count, max_concurrency, startup_duration)
+
+        # Precompute step offset times (cumulative durations)
+        self._step_offsets = []
+        cumulative = 0.0
+        for duration in self.steps_duration:
+            self._step_offsets.append(cumulative)
+            cumulative += duration
+
+    async def next_request_time(self, offset: int) -> float:
+        """
+        Calculate next request time based on current step configuration.
+
+        Distributes requests according to the rate specified for each step,
+        transitioning seamlessly between steps as time progresses.
+
+        :param offset: Unused for steps strategy
+        :return: Next request time based on current step's rate and timing
+        """
+        _ = offset  # offset unused for steps strategy
+        start_time = await self.get_processes_start_time()
+        current_index = self.next_request_index()
+
+        # Determine which step we're in based on elapsed time
+        elapsed = time.time() - start_time
+        current_step = 0
+
+        for i, step_offset in enumerate(self._step_offsets):
+            if i == len(self._step_offsets) - 1:
+                current_step = i
+                break
+            next_offset = self._step_offsets[i + 1]
+            if step_offset <= elapsed < next_offset:
+                current_step = i
+                break
+            if elapsed >= self._step_offsets[-1] + self.steps_duration[-1]:
+                current_step = len(self._step_offsets) - 1
+                break
+
+        # Calculate request time based on current step's rate
+        step_rate = self.steps_rate[current_step]
+
+        if step_rate <= 0:
+            # If rate is 0, schedule for the end of this step
+            step_end = (
+                start_time
+                + self._step_offsets[current_step]
+                + self.steps_duration[current_step]
+            )
+            return step_end
+
+        # Schedule at constant intervals within the step
+        return start_time + current_index / step_rate
+
+    def request_completed(self, request_info: RequestInfo):
+        """
+        Handle request completion (no-op for steps strategy).
+
+        :param request_info: Completed request metadata (unused)
+        """
+        _ = request_info  # request_info unused for steps strategy

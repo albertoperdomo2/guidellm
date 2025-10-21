@@ -165,6 +165,18 @@ def benchmark():
         "async/constant/poisson=requests per second."
     ),
 )
+@click.option(
+    "--steps-duration",
+    type=str,
+    default=BenchmarkGenerativeTextArgs.get_default("steps_duration"),
+    help="Comma-separated list of durations for each step in seconds. Only used with --profile=steps.",
+)
+@click.option(
+    "--steps-rate",
+    type=str,
+    default=BenchmarkGenerativeTextArgs.get_default("steps_rate"),
+    help="Comma-separated list of rates for each step in requests per second. Only used with --profile=steps.",
+)
 # Backend configuration
 @click.option(
     "--backend",
@@ -385,6 +397,15 @@ def run(**kwargs):
     kwargs["rate"] = cli_tools.format_list_arg(
         kwargs.get("rate"), default=None, simplify_single=True
     )
+
+    # Parse steps parameters if provided
+    steps_duration = kwargs.get("steps_duration")
+    if steps_duration and isinstance(steps_duration, str):
+        kwargs["steps_duration"] = [int(x.strip()) for x in steps_duration.split(",")]
+
+    steps_rate = kwargs.get("steps_rate")
+    if steps_rate and isinstance(steps_rate, str):
+        kwargs["steps_rate"] = [float(x.strip()) for x in steps_rate.split(",")]
 
     disable_console_outputs = kwargs.pop("disable_console_outputs", False)
     display_scheduler_stats = kwargs.pop("display_scheduler_stats", False)
