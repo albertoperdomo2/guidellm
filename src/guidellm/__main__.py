@@ -172,6 +172,12 @@ def benchmark():
     help="JSON string of arguments to pass to the backend.",
 )
 @click.option(
+    "--insecure",
+    is_flag=True,
+    default=False,
+    help="Disable SSL certificate verification for backend connections.",
+)
+@click.option(
     "--model",
     default=BenchmarkGenerativeTextArgs.get_default("model"),
     type=str,
@@ -387,6 +393,12 @@ def benchmark():
 def run(**kwargs):
     # Only set CLI args that differ from click defaults
     kwargs = cli_tools.set_if_not_default(click.get_current_context(), **kwargs)
+
+    # Handle insecure flag
+    if kwargs.pop("insecure", False):
+        backend_kwargs = kwargs.get("backend_kwargs", {})
+        backend_kwargs["verify"] = False
+        kwargs["backend_kwargs"] = backend_kwargs
 
     # Handle remapping for request params
     request_type = kwargs.pop("request_type", None)
