@@ -13,8 +13,6 @@ from __future__ import annotations
 import base64
 from typing import Any, Protocol, cast
 
-from loguru import logger
-
 from more_itertools import roundrobin
 
 from guidellm.scheduler import HistoryT
@@ -315,7 +313,6 @@ class TextCompletionsRequestHandler(OpenAIRequestHandler):
         :param line: Raw line from the streaming response
         :return: Parsed JSON data as dictionary, or None if line indicates completion
         """
-        logger.debug("extract_line_data raw line: {}", line)
         if line == "data: [DONE]":
             return None
 
@@ -327,7 +324,6 @@ class TextCompletionsRequestHandler(OpenAIRequestHandler):
         # failed to escape, preventing JSON parse errors from orjson.
         line = line.replace("\r", "\\r").replace("\n", "\\n")
 
-        logger.debug("extract_line_data line: {}", line)
         return json.loads(line)
 
     def extract_choices_and_usage(
