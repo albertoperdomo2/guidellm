@@ -323,6 +323,9 @@ class TextCompletionsRequestHandler(OpenAIRequestHandler):
             return {}
 
         line = line[len("data:") :].strip()
+        # Escape literal control characters (RFC 8259) that the server
+        # failed to escape, preventing JSON parse errors from orjson.
+        line = line.replace("\r", "\\r").replace("\n", "\\n")
 
         logger.debug("extract_line_data line: {}", line)
         return json.loads(line)

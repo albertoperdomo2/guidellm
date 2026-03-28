@@ -431,8 +431,46 @@ class OpenAIHTTPBackend(Backend):
             ) as stream:
                 stream.raise_for_status()
                 end_reached = False
+                sse_buffer = ""
 
-                async for chunk in stream.aiter_lines():
+                async for text_chunk in stream.aiter_text():
+                    sse_buffer += text_chunk
+
+                    while "\n\n" in sse_buffer:
+                        event, sse_buffer = sse_buffer.split("\n\n", 1)
+                        line = event.strip()
+                        if not line:
+                            continue
+
+                        iter_time = time.time()
+
+                        if request_info.timings.first_request_iteration is None:
+                            request_info.timings.first_request_iteration = (
+                                iter_time
+                            )
+                        request_info.timings.last_request_iteration = iter_time
+                        request_info.timings.request_iterations += 1
+
+                        iterations = request_handler.add_streaming_line(line)
+                        if iterations is None or iterations <= 0 or end_reached:
+                            end_reached = end_reached or iterations is None
+                            if end_reached:
+                                break
+                            continue
+
+                        if request_info.timings.first_token_iteration is None:
+                            request_info.timings.first_token_iteration = iter_time
+                            request_info.timings.token_iterations = 0
+                            yield None, request_info
+
+                        request_info.timings.last_token_iteration = iter_time
+                        request_info.timings.token_iterations += iterations
+
+                    if end_reached:
+                        break
+
+                # Process any remaining data in the buffer
+                if not end_reached and (line := sse_buffer.strip()):
                     iter_time = time.time()
 
                     if request_info.timings.first_request_iteration is None:
@@ -440,24 +478,15 @@ class OpenAIHTTPBackend(Backend):
                     request_info.timings.last_request_iteration = iter_time
                     request_info.timings.request_iterations += 1
 
-                    iterations = request_handler.add_streaming_line(chunk)
-                    if iterations is None or iterations <= 0 or end_reached:
-                        end_reached = end_reached or iterations is None
-                        if end_reached:
-                            # Break eagerly once the handler signals completion
-                            # (e.g. "data: [DONE]" or "response.completed").
-                            # Using continue instead would hang on servers that
-                            # keep the HTTP/2 stream open after the last event.
-                            break
-                        continue
+                    iterations = request_handler.add_streaming_line(line)
+                    if iterations is not None and iterations > 0:
+                        if request_info.timings.first_token_iteration is None:
+                            request_info.timings.first_token_iteration = iter_time
+                            request_info.timings.token_iterations = 0
+                            yield None, request_info
 
-                    if request_info.timings.first_token_iteration is None:
-                        request_info.timings.first_token_iteration = iter_time
-                        request_info.timings.token_iterations = 0
-                        yield None, request_info
-
-                    request_info.timings.last_token_iteration = iter_time
-                    request_info.timings.token_iterations += iterations
+                        request_info.timings.last_token_iteration = iter_time
+                        request_info.timings.token_iterations += iterations
 
             request_info.timings.request_end = time.time()
             yield request_handler.compile_streaming(request, arguments), request_info
