@@ -75,6 +75,13 @@ class OpenAIHttpBackendArgs(BackendArgs):
             )
         },
     )
+    server_history: bool = Field(
+        default=False,
+        description=(
+            "Use server-side conversation history (previous_response_id) for "
+            "multi-turn requests. Only supported with /v1/responses."
+        ),
+    )
 
     @field_validator("request_format")
     @classmethod
@@ -166,6 +173,7 @@ class OpenAIHTTPBackend(Backend):
         extras: dict[str, Any] | GenerationRequestArguments | None = None,
         max_tokens: int | None = None,
         max_completion_tokens: int | None = None,
+        server_history: bool = False,
     ):
         """
         Initialize OpenAI HTTP backend with server configuration.
@@ -180,6 +188,8 @@ class OpenAIHTTPBackend(Backend):
         :param follow_redirects: Follow HTTP redirects automatically
         :param verify: Enable SSL certificate verification
         :param validate_backend: Backend validation configuration
+        :param server_history: Use server-side conversation history
+            (previous_response_id) for multi-turn. Only with /v1/responses.
         """
         super().__init__(type_="openai_http")
 
@@ -202,6 +212,14 @@ class OpenAIHTTPBackend(Backend):
                 f"{', '.join(valid_formats)}"
             )
         self.request_type = request_format
+        self.server_history = server_history
+
+        if self.server_history and self.request_type != "/v1/responses":
+            raise ValueError(
+                "server_history=True is only supported with the Responses API "
+                "(/v1/responses). Current request format: "
+                f"'{self.request_type}'"
+            )
 
         # Store configuration
         self.api_routes = api_routes or DEFAULT_API_PATHS
@@ -381,6 +399,7 @@ class OpenAIHTTPBackend(Backend):
             stream=self.stream,
             extras=self.extras,
             max_tokens=self.max_tokens,
+            server_history=self.server_history,
         )
 
         request_url = f"{self.target}/{request_path}"
@@ -433,44 +452,7 @@ class OpenAIHTTPBackend(Backend):
                 end_reached = False
                 sse_buffer = ""
 
-                async for text_chunk in stream.aiter_text():
-                    sse_buffer += text_chunk
-
-                    while "\n\n" in sse_buffer:
-                        event, sse_buffer = sse_buffer.split("\n\n", 1)
-                        line = event.strip()
-                        if not line:
-                            continue
-
-                        iter_time = time.time()
-
-                        if request_info.timings.first_request_iteration is None:
-                            request_info.timings.first_request_iteration = (
-                                iter_time
-                            )
-                        request_info.timings.last_request_iteration = iter_time
-                        request_info.timings.request_iterations += 1
-
-                        iterations = request_handler.add_streaming_line(line)
-                        if iterations is None or iterations <= 0 or end_reached:
-                            end_reached = end_reached or iterations is None
-                            if end_reached:
-                                break
-                            continue
-
-                        if request_info.timings.first_token_iteration is None:
-                            request_info.timings.first_token_iteration = iter_time
-                            request_info.timings.token_iterations = 0
-                            yield None, request_info
-
-                        request_info.timings.last_token_iteration = iter_time
-                        request_info.timings.token_iterations += iterations
-
-                    if end_reached:
-                        break
-
-                # Process any remaining data in the buffer
-                if not end_reached and (line := sse_buffer.strip()):
+                async for chunk in self._aiter_lines(stream):
                     iter_time = time.time()
 
                     if request_info.timings.first_request_iteration is None:
@@ -494,6 +476,18 @@ class OpenAIHTTPBackend(Backend):
             # Yield current result to store iterative results before propagating
             yield request_handler.compile_streaming(request, arguments), request_info
             raise err
+
+    async def _aiter_lines(self, stream: httpx.Response) -> AsyncIterator[str]:
+        """
+        Asynchronously iterate over lines in an HTTP response stream.
+
+        :param stream: HTTP response object with streaming content
+        :yield: Lines of text from the response stream
+        """
+        async for line in stream.aiter_lines():
+            if not line.strip():
+                continue  # Skip blank lines
+            yield line
 
     def _build_headers(
         self, existing_headers: dict[str, str] | None = None

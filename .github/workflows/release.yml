@@ -14,9 +14,6 @@ jobs:
     with:
       python: ${{ matrix.python }}
 
-  ui-tests:
-    uses: ./.github/workflows/ui-testing.yml
-
   build-and-publish:
     runs-on: ubuntu-latest
     strategy:
@@ -24,7 +21,7 @@ jobs:
         python: ["3.10"]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
       - name: Setup Python with UV
@@ -40,7 +37,7 @@ jobs:
           tox -e build
       - name: Upload build artifacts
         id: artifact-upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-artifacts
           path: dist/*
@@ -51,130 +48,23 @@ jobs:
         run: |
           echo "Artifacts uploaded to: ${{ steps.artifact-upload.outputs.artifact-url }}"
       - name: Push wheel to PyPI
-        uses: neuralmagic/nm-actions/actions/publish-whl@v1.0.0
+        uses: neuralmagic/nm-actions/actions/publish-whl@1db28bd7b210523049e533d6f14ee3d4b2ff2b32 # v1.24.0
         with:
           username: ${{ secrets.PYPI_PUBLIC_USER }}
           password: ${{ secrets.PYPI_PUBLIC_AUTH }}
           whl: $(find dist -name '*.whl')
       - name: Push tar.gz to PyPI
-        uses: neuralmagic/nm-actions/actions/publish-whl@v1.0.0
+        uses: neuralmagic/nm-actions/actions/publish-whl@1db28bd7b210523049e533d6f14ee3d4b2ff2b32 # v1.24.0
         with:
           username: ${{ secrets.PYPI_PUBLIC_USER }}
           password: ${{ secrets.PYPI_PUBLIC_AUTH }}
           whl: $(find dist -name '*.tar.gz')
 
-
-  publish-versioned-ui-build:
-    needs: [ui-tests]
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v3
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: "Set GIT_TAG"
-        id: vars
-        run: |
-          if [ -z "${{ github.ref_name }}" ]; then
-            echo "TAG=latest" >> $GITHUB_ENV
-          else
-            echo "TAG=${{ github.ref_name }}" >> $GITHUB_ENV
-          fi
-
-      - name: Build app to root
-        id: build
-        run: |
-          # Export vars to ensure they are loaded before build
-          export $(grep -v '^#' .env.production | xargs)
-
-          # Set asset prefix and base path with git tag
-          ASSET_PREFIX=https://raw.githubusercontent.com/vllm-project/guidellm/refs/heads/gh-pages/ui/${{ env.TAG }}
-          BASE_PATH=/ui/${{ env.TAG }}
-          GIT_SHA=${{ github.sha }}
-          export ASSET_PREFIX=${ASSET_PREFIX}
-          export BASE_PATH=${BASE_PATH}
-          export GIT_SHA=${GIT_SHA}
-          npm run build
-
-      - name: Deploy versioned build to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./src/ui/out
-          destination_dir: ui/${{ env.TAG }}
-          keep_files: false
-          user_name: ${{ github.actor }}
-          user_email: ${{ github.actor }}@users.noreply.github.com
-          publish_branch: gh-pages
-
-  publish-latest-ui-build:
-    needs: [publish-versioned-ui-build]
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v3
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: "Set GIT_TAG"
-        id: vars
-        run: |
-          if [ -z "${{ github.ref_name }}" ]; then
-            echo "TAG=latest" >> $GITHUB_ENV
-          else
-            echo "TAG=${{ github.ref_name }}" >> $GITHUB_ENV
-          fi
-
-      - name: Build app to root
-        id: build
-        run: |
-          # Export vars to ensure they are loaded before build
-          export $(grep -v '^#' .env.production | xargs)
-
-          # Set asset prefix and base path with git tag
-          ASSET_PREFIX=https://raw.githubusercontent.com/vllm-project/guidellm/refs/heads/gh-pages/ui/latest
-          BASE_PATH=/ui/latest
-          GIT_SHA=${{ github.sha }}
-          export ASSET_PREFIX=${ASSET_PREFIX}
-          export BASE_PATH=${BASE_PATH}
-          export GIT_SHA=${GIT_SHA}
-          npm run build
-
-      - name: Update latest build in GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./src/ui/out
-          destination_dir: ui/latest
-          keep_files: false
-          user_name: ${{ github.actor }}
-          user_email: ${{ github.actor }}@users.noreply.github.com
-          publish_branch: gh-pages
-
   build-and-push-container:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
       - name: Get version from branch
@@ -186,13 +76,13 @@ jobs:
           exit 1
       - name: Store/retrieve build caches
         id: cache-buildah
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: /var/tmp/buildah-cache-*
           key: buildah-mount-cache-${{ runner.os }}-${{ runner.arch }}
       - name: Buildah build
         id: build-image
-        uses: redhat-actions/buildah-build@v2
+        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2.13
         with:
           image: ${{ github.event.repository.name }}
           build-args: |
@@ -202,7 +92,7 @@ jobs:
             ./Containerfile
       - name: Push To ghcr.io
         id: push-to-ghcr
-        uses: redhat-actions/push-to-registry@v2
+        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2.8
         with:
           image: ${{ steps.build-image.outputs.image }}
           tags: ${{ steps.build-image.outputs.tags }}
