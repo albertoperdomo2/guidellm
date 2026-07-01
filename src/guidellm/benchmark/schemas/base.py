@@ -18,7 +18,6 @@ from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import Field, NonNegativeFloat, NonNegativeInt
 
-from guidellm.benchmark.profiles import Profile
 from guidellm.scheduler import (
     RequestT,
     ResponseT,
@@ -38,6 +37,7 @@ __all__ = [
     "BenchmarkAccumulatorT",
     "BenchmarkConfig",
     "BenchmarkT",
+    "TransientPhaseConfig",
 ]
 
 BenchmarkAccumulatorT = TypeVar(
@@ -50,8 +50,7 @@ BenchmarkT = TypeVar("BenchmarkT", bound="Benchmark")
 
 
 class TransientPhaseConfig(StandardBaseModel):
-    """
-    Configure warmup and cooldown phases for benchmark execution.
+    """Configure warmup and cooldown phases for benchmark execution.
 
     Supports flexible phase definition through percentage or absolute value
     specifications with multiple interpretation modes. Phases can be bounded
@@ -97,6 +96,7 @@ class TransientPhaseConfig(StandardBaseModel):
             "interpretation depends on mode. Takes precedence over value when target "
             "mode is available, otherwise falls back to value"
         ),
+        examples=[0.0, 0.5],
         lt=1.0,
     )
     value: NonNegativeInt | NonNegativeFloat | None = Field(
@@ -106,6 +106,7 @@ class TransientPhaseConfig(StandardBaseModel):
             "interpretation depends on mode. Used when percent is unset or "
             "target mode unavailable"
         ),
+        examples=[1.0, 2.0],
     )
     mode: Literal[
         "duration", "requests", "prefer_duration", "prefer_requests", "both"
@@ -157,7 +158,10 @@ class TransientPhaseConfig(StandardBaseModel):
         return duration, requests
 
     def compute_transition_time(
-        self, info: RequestInfo, state: SchedulerState, period: Literal["start", "end"]
+        self,
+        info: RequestInfo,
+        state: SchedulerState,
+        period: Literal["start", "end"],
     ) -> tuple[bool, float | None]:
         """
         Determine transition timestamp for entering or exiting phase.
@@ -271,9 +275,12 @@ class BenchmarkConfig(StandardBaseDict):
     constraints: dict[str, dict[str, Any]] = Field(
         description="Constraint definitions applied to scheduler strategy execution",
     )
-    sample_requests: int | None = Field(
+    sample_size: int | None = Field(
         default=None,
-        description="Request count for statistical sampling in final metrics",
+        description=(
+            "Maximum number of requests per status group to retain full data for. "
+            "None keeps all, 0 strips all, N > 0 uses reservoir sampling."
+        ),
     )
     warmup: TransientPhaseConfig = Field(
         default_factory=TransientPhaseConfig,
@@ -287,7 +294,7 @@ class BenchmarkConfig(StandardBaseDict):
         default=True,
         description="Prioritize response-based metrics over request-based metrics",
     )
-    profile: Profile = Field(
+    profile: dict[str, Any] = Field(
         description="Profile instance coordinating multi-strategy execution",
     )
     requests: dict[str, Any] = Field(

@@ -5,9 +5,13 @@ import pytest
 import yaml
 
 from guidellm.benchmark.outputs.output import GenerativeBenchmarkerOutput
-from guidellm.benchmark.outputs.serialized import GenerativeBenchmarkerSerialized
+from guidellm.benchmark.outputs.serialized import (
+    GenerativeBenchmarkerSerialized,
+    JSONBenchmarkOutputArgs,
+    YAMLBenchmarkOutputArgs,
+)
 from guidellm.benchmark.schemas import (
-    BenchmarkGenerativeTextArgs,
+    BenchmarkScenario,
     GenerativeBenchmarksReport,
 )
 
@@ -15,18 +19,56 @@ from guidellm.benchmark.schemas import (
 @pytest.fixture
 def minimal_report() -> GenerativeBenchmarksReport:
     """
-    Create a minimal GenerativeBenchmarksReport for testing serialization.
+    Create a GenerativeBenchmarksReport for testing serialization.
+    """
+    config = BenchmarkScenario.model_validate(
+        {
+            "spec": {
+                "backend": {
+                    "kind": "openai_http",
+                    "target": "http://localhost:8000/v1",
+                    "model": "test-model",
+                },
+                "data": [{"kind": "huggingface", "source": "test_data.jsonl"}],
+                "profile": {"kind": "constant", "rate": 10.0},
+            },
+        }
+    )
+    return GenerativeBenchmarksReport(config=config)
+
+
+@pytest.fixture
+def file_path_report(tmp_path: Path) -> GenerativeBenchmarksReport:
+    """
+    Create a report whose benchmark args contain nested Path values.
 
     ## WRITTEN BY AI ##
     """
-    args = BenchmarkGenerativeTextArgs(
-        backend_kwargs={
-            "target": "http://localhost:8000/v1",
-            "model": "test-model",
-        },
-        data=["test_data.jsonl"],
+    args = BenchmarkScenario.model_validate(
+        {
+            "spec": {
+                "backend": {
+                    "kind": "openai_http",
+                    "target": "http://localhost:8000/v1",
+                    "model": "test-model",
+                },
+                "profile": {"kind": "sweep"},
+                "data": [
+                    {
+                        "kind": "json_file",
+                        "path": tmp_path / "data.jsonl",
+                        "load_kwargs": {"split": "train"},
+                    }
+                ],
+                "tokenizer": {"kind": "huggingface_auto", "model": "test-model"},
+                "data_column_mapper": {"kind": "generative_column_mapper"},
+                "data_preprocessors": [],
+                "data_finalizer": {"kind": "generative"},
+                "data_loader": {"kind": "pytorch"},
+            },
+        }
     )
-    return GenerativeBenchmarksReport(args=args)
+    return GenerativeBenchmarksReport(config=args)
 
 
 class TestResolveFormatType:
@@ -38,43 +80,40 @@ class TestResolveFormatType:
 
     def test_resolve_yaml_alias_sets_format_type(self, tmp_path: Path):
         """
-        Resolving with the bare 'yaml' alias should produce a handler
+        Resolving with YAMLBenchmarkOutputArgs should produce a handler
         with format_type='yaml'.
 
         ## WRITTEN BY AI ##
         """
-        resolved = GenerativeBenchmarkerOutput.resolve(
-            outputs=["yaml"], output_dir=tmp_path
+        handler = GenerativeBenchmarkerOutput.resolve(
+            YAMLBenchmarkOutputArgs(path=tmp_path / "benchmarks.yaml")
         )
-        handler = resolved["yaml"]
         assert isinstance(handler, GenerativeBenchmarkerSerialized)
         assert handler.format_type == "yaml"
 
     def test_resolve_json_alias_sets_format_type(self, tmp_path: Path):
         """
-        Resolving with the bare 'json' alias should produce a handler
+        Resolving with JSONBenchmarkOutputArgs should produce a handler
         with format_type='json'.
 
         ## WRITTEN BY AI ##
         """
-        resolved = GenerativeBenchmarkerOutput.resolve(
-            outputs=["json"], output_dir=tmp_path
+        handler = GenerativeBenchmarkerOutput.resolve(
+            JSONBenchmarkOutputArgs(path=tmp_path / "benchmarks.json")
         )
-        handler = resolved["json"]
         assert isinstance(handler, GenerativeBenchmarkerSerialized)
         assert handler.format_type == "json"
 
     def test_resolve_explicit_yaml_filename(self, tmp_path: Path):
         """
-        Resolving with an explicit filename like 'results.yaml' should produce
-        a handler whose output_path includes the filename.
+        Resolving with an explicit path should produce a handler
+        whose output_path matches.
 
         ## WRITTEN BY AI ##
         """
-        resolved = GenerativeBenchmarkerOutput.resolve(
-            outputs=["results.yaml"], output_dir=tmp_path
+        handler = GenerativeBenchmarkerOutput.resolve(
+            YAMLBenchmarkOutputArgs(path=tmp_path / "results.yaml")
         )
-        handler = resolved["yaml"]
         assert isinstance(handler, GenerativeBenchmarkerSerialized)
         assert handler.output_path == tmp_path / "results.yaml"
 
@@ -112,7 +151,7 @@ class TestFinalizeFormats:
             json.loads(content)
         parsed = yaml.safe_load(content)
         assert isinstance(parsed, dict)
-        assert "args" in parsed
+        assert "config" in parsed
 
     @pytest.mark.asyncio
     async def test_finalize_json_writes_json_file(
@@ -136,7 +175,45 @@ class TestFinalizeFormats:
         content = result_path.read_text()
         parsed = json.loads(content)
         assert isinstance(parsed, dict)
-        assert "args" in parsed
+        assert "config" in parsed
+
+    @pytest.mark.asyncio
+    async def test_finalize_json_serializes_nested_paths(
+        self, tmp_path: Path, file_path_report: GenerativeBenchmarksReport
+    ):
+        """
+        JSON report serialization should convert nested Path values to strings.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = GenerativeBenchmarkerSerialized(
+            output_path=tmp_path, format_type="json"
+        )
+        result_path = await handler.finalize(file_path_report)
+
+        parsed = json.loads(result_path.read_text())
+        assert parsed["config"]["spec"]["data"][0]["path"] == str(
+            tmp_path / "data.jsonl"
+        )
+
+    @pytest.mark.asyncio
+    async def test_finalize_yaml_serializes_nested_paths(
+        self, tmp_path: Path, file_path_report: GenerativeBenchmarksReport
+    ):
+        """
+        YAML report serialization should emit nested Path values as safe strings.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = GenerativeBenchmarkerSerialized(
+            output_path=tmp_path, format_type="yaml"
+        )
+        result_path = await handler.finalize(file_path_report)
+
+        parsed = yaml.safe_load(result_path.read_text())
+        assert parsed["config"]["spec"]["data"][0]["path"] == str(
+            tmp_path / "data.jsonl"
+        )
 
     @pytest.mark.asyncio
     async def test_finalize_explicit_path_respects_extension(
@@ -162,4 +239,4 @@ class TestFinalizeFormats:
             json.loads(content)
         parsed = yaml.safe_load(content)
         assert isinstance(parsed, dict)
-        assert "args" in parsed
+        assert "config" in parsed

@@ -16,7 +16,7 @@ from pydantic import Field, computed_field
 
 from guidellm.schemas.base import StandardBaseDict, StandardBaseModel
 
-__all__ = ["RequestInfo", "RequestTimings"]
+__all__ = ["RequestInfo", "RequestSettings", "RequestTimings"]
 
 
 class RequestTimings(StandardBaseDict):
@@ -58,6 +58,13 @@ class RequestTimings(StandardBaseDict):
     )
     first_token_iteration: float | None = Field(
         default=None,
+    )
+    first_output_token_iteration: float | None = Field(
+        default=None,
+        description=(
+            "Unix timestamp of the first non-reasoning content token. "
+            "Equals first_token_iteration when no reasoning tokens are emitted."
+        ),
     )
     last_token_iteration: float | None = Field(
         default=None,
@@ -102,6 +109,28 @@ class RequestTimings(StandardBaseDict):
         ]
         valid_timings = [field for field in timing_fields if field is not None]
         return max(valid_timings) if valid_timings else None
+
+
+class RequestSettings(StandardBaseDict):
+    """
+    Per-request scheduling metadata attached at enqueue, before worker dequeue.
+
+    Populated by dataset finalizers (for example from trace ``relative_timestamp``
+    columns). Scheduling strategies read these fields at dequeue. For trace replay,
+    a non-null ``relative_timestamp`` becomes an absolute start time at dequeue:
+    ``start_time + time_scale * relative_timestamp``. When ``relative_timestamp``
+    is null, trace replay schedules the request at benchmark start (no trace offset).
+    """
+
+    relative_timestamp: float | None = Field(
+        default=None,
+        description=(
+            "Trace offset in seconds from the first event after sorting (0 for the "
+            "earliest event). Trace replay converts this to an absolute start time "
+            "at dequeue: start_time + time_scale * relative_timestamp. When null, "
+            "trace replay uses benchmark start time only."
+        ),
+    )
 
 
 class RequestInfo(StandardBaseModel):
@@ -160,6 +189,10 @@ class RequestInfo(StandardBaseModel):
         default_factory=RequestTimings,
         description="Timing measurements for the request lifecycle",
     )
+    settings: RequestSettings = Field(
+        default_factory=RequestSettings,
+        description="Per-request scheduling metadata for strategy interpretation",
+    )
 
     error: str | None = Field(
         default=None, description="Error message if the request status is 'errored'"
@@ -199,6 +232,7 @@ class RequestInfo(StandardBaseModel):
         return super().model_copy(
             update={
                 "timings": self.timings.model_copy(),
+                "settings": self.settings.model_copy(),
             },
             deep=False,
         )

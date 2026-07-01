@@ -18,14 +18,16 @@ from collections import defaultdict
 from copy import deepcopy
 from math import ceil
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field, computed_field
 
 from guidellm.benchmark.outputs.output import GenerativeBenchmarkerOutput
 from guidellm.benchmark.schemas import (
-    BenchmarkGenerativeTextArgs,
+    BenchmarkArgs,
+    BenchmarkOutputArgs,
+    BenchmarkScenario,
     GenerativeBenchmark,
     GenerativeBenchmarksReport,
 )
@@ -34,7 +36,24 @@ from guidellm.settings import settings
 from guidellm.utils.dict import recursive_key_update
 from guidellm.utils.text import camelize_str, load_text
 
-__all__ = ["GenerativeBenchmarkerHTML"]
+__all__ = [
+    "GenerativeBenchmarkerHTML",
+    "HTMLBenchmarkOutputArgs",
+]
+
+
+@BenchmarkOutputArgs.register("html")
+class HTMLBenchmarkOutputArgs(BenchmarkOutputArgs):
+    """Model for HTML benchmark output arguments."""
+
+    kind: Literal["html"] = Field(
+        default="html",
+        description="The kind of output.",
+    )
+    path: Path = Field(
+        default=Path("./benchmarks.html"),
+        description="The file to save the output to.",
+    )
 
 
 @GenerativeBenchmarkerOutput.register("html")
@@ -62,21 +81,17 @@ class GenerativeBenchmarkerHTML(GenerativeBenchmarkerOutput):
     )
 
     @classmethod
-    def validated_kwargs(
-        cls, output_path: str | Path | None, **_kwargs
-    ) -> dict[str, Any]:
+    def from_args(cls, args: BenchmarkOutputArgs) -> GenerativeBenchmarkerHTML:
         """
-        Validate and normalize output path argument.
+        Create an HTML output formatter from output arguments.
 
-        :param output_path: Output file or directory path for the HTML report
-        :return: Dictionary containing validated output_path if provided
+        :param args: Output configuration with path
+        :return: Configured HTML output formatter
         """
-        validated: dict[str, Any] = {}
-        if output_path is not None:
-            validated["output_path"] = (
-                Path(output_path) if not isinstance(output_path, Path) else output_path
-            )
-        return validated
+        if not isinstance(args, HTMLBenchmarkOutputArgs):
+            raise TypeError(f"Expected HTMLBenchmarkOutputArgs, got {type(args)}")
+
+        return cls(output_path=args.path)
 
     async def finalize(self, report: GenerativeBenchmarksReport) -> Path:
         """
@@ -94,7 +109,7 @@ class GenerativeBenchmarkerHTML(GenerativeBenchmarkerOutput):
             output_path = output_path / self.DEFAULT_FILE
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        data = _build_ui_data(report.benchmarks, report.args)
+        data = _build_ui_data(report.benchmarks, report.config)
         camel_data = recursive_key_update(deepcopy(data), camelize_str)
 
         ui_api_data = {
@@ -299,7 +314,7 @@ def _inject_data(js_data: dict[str, str], html: str) -> str:
 
 
 def _build_ui_data(
-    benchmarks: list[GenerativeBenchmark], args: BenchmarkGenerativeTextArgs
+    benchmarks: list[GenerativeBenchmark], config: BenchmarkScenario
 ) -> dict[str, Any]:
     """
     Build complete UI data structure from benchmarks.
@@ -312,14 +327,14 @@ def _build_ui_data(
     :return: Dictionary with run_info, workload_details, and benchmarks sections
     """
     return {
-        "run_info": _build_run_info(benchmarks, args),
-        "workload_details": _build_workload_details(benchmarks, args),
+        "run_info": _build_run_info(benchmarks, config.spec),
+        "workload_details": _build_workload_details(benchmarks, config.spec),
         "benchmarks": _build_benchmarks(benchmarks),
     }
 
 
 def _build_run_info(
-    benchmarks: list[GenerativeBenchmark], args: BenchmarkGenerativeTextArgs
+    benchmarks: list[GenerativeBenchmark], args: BenchmarkArgs
 ) -> dict[str, Any]:
     """
     Build run metadata from benchmarks.
@@ -331,9 +346,7 @@ def _build_run_info(
     :param args: Benchmark configuration arguments
     :return: Dictionary with model, task, timestamp, and dataset information
     """
-    model = (
-        args.backend_kwargs.model if hasattr(args.backend_kwargs, "model") else "N/A"
-    )
+    model = args.backend.model if hasattr(args.backend, "model") else "N/A"
     timestamp = max(bm.start_time for bm in benchmarks if bm.start_time is not None)
     return {
         "model": {"name": model, "size": 0},
@@ -344,7 +357,7 @@ def _build_run_info(
 
 
 def _build_workload_details(
-    benchmarks: list[GenerativeBenchmark], args: BenchmarkGenerativeTextArgs
+    benchmarks: list[GenerativeBenchmark], args: BenchmarkArgs
 ) -> dict[str, Any]:
     """
     Build workload details from benchmarks.
@@ -357,9 +370,7 @@ def _build_workload_details(
     :param args: Benchmark configuration arguments
     :return: Dictionary with prompts, generations, request timing, and server info
     """
-    target = (
-        args.backend_kwargs.target if hasattr(args.backend_kwargs, "target") else None
-    )
+    target = args.backend.target if hasattr(args.backend, "target") else None
     rate_type = benchmarks[0].config.strategy.type_
     successful_requests = [req for bm in benchmarks for req in bm.requests.successful]
 

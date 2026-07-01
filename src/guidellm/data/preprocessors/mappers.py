@@ -2,22 +2,62 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import Any, ClassVar, TypeAlias, cast
+from typing import Any, ClassVar, Literal, TypeAlias, cast
 
 from datasets import Dataset, IterableDataset
+from pydantic import Field
 
 from guidellm.data.preprocessors.preprocessor import (
     DataDependentPreprocessor,
     PreprocessorRegistry,
 )
-from guidellm.data.schemas import GenerativeDatasetColumnType
+from guidellm.data.schemas import (
+    DataPreprocessorArgs,
+    DatasetType,
+    GenerativeDatasetColumnType,
+)
 
-__all__ = ["GenerativeColumnMapper", "PoolingColumnMapper"]
+__all__ = [
+    "GenerativeColumnMapper",
+    "GenerativeColumnMapperArgs",
+    "PoolingColumnMapper",
+]
 
 # dataset_column_type and turn index
 DatasetColumnKey: TypeAlias = tuple[GenerativeDatasetColumnType, int]
 # dataset index and column_name
 DatasetColumnValue: TypeAlias = tuple[int, str]
+
+
+@DataPreprocessorArgs.register(
+    [
+        "generative_column_mapper",
+        "pooling_column_mapper",
+    ]
+)
+class GenerativeColumnMapperArgs(DataPreprocessorArgs):
+    """Model for generative column mapper preprocessor arguments."""
+
+    kind: Literal["generative_column_mapper", "pooling_column_mapper"] = Field(
+        default="generative_column_mapper",
+        description="Type identifier for the generative column mapper preprocessor.",
+    )
+    column_mappings: dict[str, str | list[str]] | None = Field(
+        default=None,
+        description="Mappings for the column names.",
+        examples=[
+            {
+                "prompt_tokens_count_column": [
+                    "prompt_tokens_count",
+                    "input_tokens_count",
+                ],
+                "output_tokens_count_column": [
+                    "output_tokens_count",
+                    "completion_tokens_count",
+                ],
+            }
+        ],
+    )
 
 
 @PreprocessorRegistry.register("generative_column_mapper")
@@ -67,6 +107,17 @@ class GenerativeColumnMapper(DataDependentPreprocessor):
             "wav",
             "mp3",
         ],
+        "tools_column": [
+            "tools",
+            "functions",
+            "tool_definitions",
+        ],
+        "tool_response_column": [
+            "tool_response",
+            "tool_result",
+            "tool_output",
+        ],
+        "relative_timestamp_column": ["relative_timestamp"],
     }
     column_name_pattern: str = (
         r"^(?P<full_name>(?P<match_name>({name})(es|s)?)([-_](?P<turn>\d+))?)$"
@@ -112,6 +163,22 @@ class GenerativeColumnMapper(DataDependentPreprocessor):
         datasets: list[Dataset | IterableDataset],
         input_mappings: dict[str, str | list[str]] | None = None,
     ) -> dict[DatasetColumnKey, list[DatasetColumnValue]]:
+        """
+        Resolve column mappings across one or more datasets.
+
+        For each dataset, matches actual column names against the requested
+        mapping names (or :attr:`defaults`) using regex patterns that account
+        for pluralisation and turn suffixes (e.g. ``prompt-0``, ``prompt-1``).
+
+        :param datasets: The loaded datasets to inspect for column names.
+        :param input_mappings: Optional explicit column mappings. When ``None``,
+            :attr:`defaults` is used. Values may be a single name or a list of
+            candidate names in priority order.
+        :return: A dict keyed by ``(column_type, turn_index)`` whose values are
+            lists of ``(dataset_index, column_name)`` pairs indicating where
+            each logical column can be found. Categories with no matching
+            columns are silently omitted from the result.
+        """
         mappings: dict[DatasetColumnKey, list[DatasetColumnValue]] = defaultdict(list)
         input_map: dict[str, list[str]] = cls.defaults
         if input_mappings:
@@ -151,8 +218,7 @@ class GenerativeColumnMapper(DataDependentPreprocessor):
                     dataset_columns_str,
                 )
 
-                # Re-enumerate to ensure we don't have a gap in turns
-                for turn, (_, column_name) in enumerate(sorted(turn_columns)):
+                for turn, column_name in sorted(turn_columns):
                     column_type = cast("GenerativeDatasetColumnType", column_type)
                     mappings[(column_type, turn)].append((index, column_name))
 
@@ -160,10 +226,9 @@ class GenerativeColumnMapper(DataDependentPreprocessor):
 
     def __init__(
         self,
-        column_mappings: dict[str, str | list[str]] | None = None,
-        **_: Any,  # Ignore global kwargs
+        config: GenerativeColumnMapperArgs,
     ):
-        self.input_mappings = column_mappings
+        self.input_mappings = config.column_mappings
         self.datasets_column_mappings: (
             dict[DatasetColumnKey, list[DatasetColumnValue]] | None
         )
@@ -194,13 +259,18 @@ class GenerativeColumnMapper(DataDependentPreprocessor):
 
     def setup_data(
         self,
-        datasets: list[Dataset | IterableDataset],
-        data_args: list[dict[str, Any]],
+        datasets: list[DatasetType],
     ):
-        _ = data_args  # Unused for this mapper
         self.datasets_column_mappings = self.datasets_mappings(
             datasets, self.input_mappings
         )
+
+        if not self.datasets_column_mappings:
+            raise ValueError(
+                "GenerativeColumnMapper found no matching columns. "
+                f"Requested mappings: {self.input_mappings or 'default mappings'}. "
+                "Every row will produce an empty result."
+            )
 
 
 @PreprocessorRegistry.register("pooling_column_mapper")

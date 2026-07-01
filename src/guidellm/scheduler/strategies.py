@@ -26,7 +26,7 @@ from typing import Annotated, ClassVar, Literal, TypeVar
 
 from pydantic import Field, NonNegativeFloat, NonNegativeInt, PositiveInt, PrivateAttr
 
-from guidellm.schemas import PydanticClassRegistryMixin, RequestInfo
+from guidellm.schemas import PydanticClassRegistryMixin, RequestInfo, RequestSettings
 from guidellm.utils.mixins import InfoMixin
 
 __all__ = [
@@ -38,11 +38,12 @@ __all__ = [
     "StrategyType",
     "SynchronousStrategy",
     "ThroughputStrategy",
+    "TraceReplayStrategy",
 ]
 
 
 StrategyType = Annotated[
-    Literal["synchronous", "concurrent", "throughput", "constant", "poisson"],
+    Literal["synchronous", "concurrent", "throughput", "constant", "poisson", "trace"],
     "Valid strategy type identifiers for scheduling request patterns",
 ]
 
@@ -219,6 +220,26 @@ class SchedulingStrategy(PydanticClassRegistryMixin["SchedulingStrategy"], InfoM
         :param request_info: Completed request metadata including timing details
             and completion status
         """
+
+    async def resolve_dequeued_target_start(
+        self,
+        worker_index: NonNegativeInt,
+        provisional_start: float,
+        settings: RequestSettings,
+    ) -> float:
+        """
+        Resolve scheduled start time after dequeue using per-request settings.
+
+        Default returns ``provisional_start`` unchanged. Strategies with
+        enqueue-bound timing metadata can override to reinterpret settings.
+
+        :param worker_index: Worker process index handling the request
+        :param provisional_start: Start time from the worker's scheduling slot
+        :param settings: Per-request scheduling metadata attached at enqueue
+        :return: Unix timestamp when the request should begin processing
+        """
+        _ = (worker_index, settings)
+        return provisional_start
 
     def requeue_delay(self) -> float:
         """
@@ -671,3 +692,53 @@ class AsyncPoissonStrategy(SchedulingStrategy):
         :param request_info: Completed request metadata (unused)
         """
         _ = request_info  # request_info unused for async poisson strategy
+
+
+@SchedulingStrategy.register("trace")
+class TraceReplayStrategy(SchedulingStrategy):
+    """
+    Replay scheduling from a trace of timestamps.
+
+    Each request carries a ``relative_timestamp`` in ``RequestSettings`` from the
+    dataset finalizer. ``next_request_time`` schedules dequeue immediately at
+    benchmark start; ``resolve_dequeued_target_start`` applies the trace offset via
+    ``start_time + time_scale * relative_timestamp``, reproducing inter-arrival
+    timing under multiprocessing.
+    """
+
+    type_: Literal["trace"] = "trace"  # type: ignore[assignment]
+    time_scale: float = Field(
+        default=1.0,
+        gt=0,
+        description="Scale factor applied to relative timestamps from the dataset",
+    )
+
+    def __str__(self) -> str:
+        return f"trace@{self.time_scale:.2f}"
+
+    @property
+    def processes_limit(self) -> PositiveInt | None:
+        return None
+
+    @property
+    def requests_limit(self) -> PositiveInt | None:
+        return None
+
+    async def next_request_time(self, worker_index: NonNegativeInt) -> float:
+        _ = worker_index
+        return await self.get_processes_start_time()
+
+    async def resolve_dequeued_target_start(
+        self,
+        worker_index: NonNegativeInt,
+        provisional_start: float,
+        settings: RequestSettings,
+    ) -> float:
+        _ = (worker_index, provisional_start)
+        if settings.relative_timestamp is None:
+            return await self.get_processes_start_time()
+        start_time = await self.get_processes_start_time()
+        return start_time + self.time_scale * settings.relative_timestamp
+
+    def request_completed(self, request_info: RequestInfo):
+        _ = request_info

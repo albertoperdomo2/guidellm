@@ -1,7 +1,6 @@
 """Utilities for E2E tests."""
 
 import json
-import shlex
 import subprocess
 import sys
 import time
@@ -50,7 +49,7 @@ class GuidellmClient:
         max_requests: int | None = None,
         max_error_rate: float | None = None,
         over_saturation: dict[str, Any] | None = None,
-        data: str = "prompt_tokens=256,output_tokens=128",
+        data: str = "kind=synthetic_text,prompt_tokens=256,output_tokens=128",
         processor: str = "gpt2",
         additional_args: str = "",
         extra_env: dict[str, str] | None = None,
@@ -64,55 +63,51 @@ class GuidellmClient:
         :param max_requests: Maximum number of requests
         :param max_error_rate: Maximum error rate before stopping
         :param over_saturation: Over-saturation detection configuration (dict).
-            Passed as JSON string to --over-saturation CLI argument.
-        :param data: Data configuration string
+        :param data: Data configuration string (kind=<type>,key=val,...)
         :param processor: Processor/tokenizer to use
         :param additional_args: Additional command line arguments
         :param extra_env: Additional environment variables to set
         """
         guidellm_exe = get_guidellm_executable()
+        output_path = self.output_dir / self.outputs
 
-        # Build command components
         cmd_parts = [
             *([f"{k}={v}" for k, v in extra_env.items()] if extra_env else []),
             "HF_HOME=" + str(self.output_dir / "huggingface_cache"),
-            f"{guidellm_exe} benchmark run",
-            f'--target "{self.target}"',
-            f"--profile {profile}",
-            f"--rate {rate}",
+            f"{guidellm_exe} run",
+            f'--backend "kind=openai_http,target={self.target}"',
+            f'--profile "kind={profile},rate={rate}"',
         ]
 
         if max_seconds is not None:
-            cmd_parts.append(f"--max-seconds {max_seconds}")
+            cmd_parts.append(f'--constraint "kind=max_duration,seconds={max_seconds}"')
 
         if max_requests is not None:
-            cmd_parts.append(f"--max-requests {max_requests}")
+            cmd_parts.append(f'--constraint "kind=max_requests,count={max_requests}"')
 
         if max_error_rate is not None:
-            cmd_parts.append(f"--max-error-rate {max_error_rate}")
+            cmd_parts.append(
+                f'--constraint "kind=max_error_rate,rate={max_error_rate}"'
+            )
 
         if over_saturation is not None:
-            if isinstance(over_saturation, dict):
-                # Use --default-over-saturation flag for empty dict (defaults)
-                if over_saturation == {}:
-                    cmd_parts.append("--default-over-saturation")
-                else:
-                    # Escape the JSON string properly for shell
-                    json_str = json.dumps(over_saturation)
-                    # Use shlex.quote to properly escape for shell
-                    cmd_parts.append(f"--over-saturation {shlex.quote(json_str)}")
-            else:
+            if not isinstance(over_saturation, dict):
                 raise TypeError(
                     f"over_saturation must be a dict or None, "
                     f"got {type(over_saturation)}"
                 )
+            if over_saturation == {}:
+                cmd_parts.append("--constraint kind=over_saturation")
+            else:
+                config_str = ",".join(f"{k}={v}" for k, v in over_saturation.items())
+                cmd_parts.append(f'--constraint "kind=over_saturation,{config_str}"')
 
         cmd_parts.extend(
             [
                 f'--data "{data}"',
-                f'--processor "{processor}"',
-                f"--output-dir {self.output_dir}",
-                f"--outputs {self.outputs}",
+                f'--tokenizer "kind=huggingface_auto,model={processor}"',
+                f'--output "kind=json,path={output_path}"',
+                "--disable-console",
             ]
         )
 

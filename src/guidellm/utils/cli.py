@@ -1,18 +1,28 @@
 import codecs
-import json
 from typing import Any
 
 import click
+import yaml
+
+# NOTE: Sentinel is sentinel in newer (unreleased) version of typing_extensions
+# which matches the accepted version of PEP 661 in Python 3.15+
+# NOTE: Not sure why but mypy doesn't recognize Sentinel as a type
+from typing_extensions import Sentinel  # type: ignore[attr-defined]
+
+from guidellm.utils import arg_string
 
 __all__ = [
+    "BLANK",
     "Union",
     "decode_escaped_str",
-    "format_list_arg",
-    "parse_json",
+    "overrides_to_benchmarks",
+    "parse_arguments",
     "parse_list",
-    "parse_list_floats",
+    "parse_overrides",
     "set_if_not_default",
 ]
+
+BLANK = Sentinel("BLANK")
 
 
 def parse_list(ctx, param, value) -> list[str] | None:
@@ -40,7 +50,14 @@ def parse_list(ctx, param, value) -> list[str] | None:
 
     if isinstance(value, str) and "," in value:
         # Handle comma-separated strings
-        return [item.strip() for item in value.split(",") if item.strip()]
+        result = []
+        for item in value.split(","):
+            stripped = item.strip()
+            if stripped:
+                result.append(stripped)
+            else:
+                result.append(BLANK)
+        return result
 
     if isinstance(value, str):
         # Handle single string
@@ -50,64 +67,41 @@ def parse_list(ctx, param, value) -> list[str] | None:
     return [value]
 
 
-def parse_list_floats(ctx, param, value):
-    str_list = parse_list(ctx, param, value)
-    if str_list is None:
-        return None
+def parse_arguments(
+    ctx: click.Context, param: click.Parameter, value: list[str] | tuple[str, ...] | str
+) -> Any:
+    """
+    Parse a string value into a Python object using YAML, JSON, or key=value pairs.
 
-    item = None  # For error reporting
-    try:
-        return [float(item) for item in str_list]
-    except ValueError as err:
-        # Raise a Click error if any part isn't a valid float
-        raise click.BadParameter(
-            f"Input '{value}' is not a valid comma-separated list "
-            f"of floats/ints. Failed on {item} Error: {err}"
-        ) from err
+    This functions uses a combination of YAML and arg_string parsers to handle any input
+    format since PyYAML will parse JSON and raw types.
 
-
-def parse_json(ctx, param, value):  # noqa: ARG001, C901, PLR0911
-    if isinstance(value, dict):
-        return value
-
-    if value is None or value == [None]:
-        return None
-
-    if isinstance(value, str) and not value.strip():
-        return None
-
+    :param ctx: Click context
+    :param param: Click parameter
+    :param value: The input value to parse, string or list/tuple of strings
+    """
     if isinstance(value, list | tuple):
-        return [parse_json(ctx, param, val) for val in value]
+        return [parse_arguments(ctx, param, val) for val in value]
+    if isinstance(value, str):
+        yaml_parsed = False
+        try:
+            value_parsed = yaml.safe_load(value)
+            yaml_parsed = True
+        except yaml.YAMLError:
+            value_parsed = value
+        # If no change from YAML parsing, try arg_string parsing
+        if value_parsed == value:
+            try:
+                value_parsed = arg_string.loads(value)
+            # If arg_string parsing fails, attempt to parse the original string
+            except arg_string.ArgStringParseError as e:
+                if not yaml_parsed:
+                    raise click.BadParameter(
+                        f"{param.name} must be a valid YAML, JSON, or key=value string."
+                    ) from e
+        return value_parsed
 
-    if "{" not in value and "}" not in value and "=" in value:
-        # Treat it as a key=value pair if it doesn't look like JSON.
-        result = {}
-        for pair in value.split(","):
-            if "=" not in pair:
-                raise click.BadParameter(
-                    f"{param.name} must be a valid JSON string or key=value pairs."
-                )
-            key, val = pair.split("=", 1)
-            result[key.strip()] = val.strip()
-        return result
-
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError as err:
-        # If json parsing fails, check if it looks like a plain string
-        if "{" not in value and "}" not in value:
-            return value
-
-        raise click.BadParameter(f"{param.name} must be a valid JSON string.") from err
-
-
-def parse_json_list(ctx, param, value):
-    list_value = parse_list(ctx, param, value)
-
-    if list_value is None:
-        return None
-
-    return [parse_json(ctx, param, item) for item in list_value]
+    return value
 
 
 def set_if_not_default(ctx: click.Context, **kwargs) -> dict[str, Any]:
@@ -121,29 +115,6 @@ def set_if_not_default(ctx: click.Context, **kwargs) -> dict[str, Any]:
             values[k] = v
 
     return values
-
-
-def format_list_arg(
-    value: Any, default: Any = None, simplify_single: bool = False
-) -> list[Any] | Any:
-    """
-    Format a multi-argument value for display.
-
-    :param value: The value to format, which can be a single value or a list/tuple.
-    :param default: The default value to set if the value is non truthy.
-    :param simplify_single: If True and the value is a single-item list/tuple,
-        return the single item instead of a list.
-    :return: Formatted list of values, or single value if simplify_single and applicable
-    """
-    if not value:
-        return default
-
-    if isinstance(value, tuple):
-        value = list(value)
-    elif not isinstance(value, list):
-        value = [value]
-
-    return value if not simplify_single or len(value) != 1 else value[0]
 
 
 class Union(click.ParamType):
@@ -201,3 +172,77 @@ def decode_escaped_str(_ctx, _param, value):
         return codecs.decode(value, "unicode_escape")
     except Exception as e:
         raise click.BadParameter(f"Could not decode escape sequences: {e}") from e
+
+
+def overrides_to_benchmarks(*overrides: tuple[str, list[Any]]) -> list[dict[str, Any]]:
+    """
+    Convert a list of (benchmark_name, override_list) tuples into a list of benchmarks
+
+    Resulting benchmark list is as long as the longest override list.
+    None values are omitted.
+
+    Example::
+        >>> overrides_to_benchmarks(
+        ...     ("profile.streams", [1,2,3,4]),
+        ...     ("constraint[0].seconds", [10,20,<BLANK>,30])
+        ... )
+        [
+            {"profile.streams": 1, "constraint[0].seconds": 10}
+            {"profile.streams": 2, "constraint[0].seconds": 20}
+            {"profile.streams": 3}
+            {"profile.streams": 4, "constraint[0].seconds": 30}
+        ]
+    """
+    benchmarks: list[dict[str, Any]] = []
+    for name, values in overrides:
+        for i, value in enumerate(values):
+            if len(benchmarks) <= i:
+                benchmarks.append({})
+            if value is not BLANK:
+                benchmarks[i][name] = value
+    return benchmarks
+
+
+def parse_overrides(ctx, param, value):
+    """
+    Click callback to parse override arguments into a list of benchmark dicts.
+
+    Expects input as multiple occurrences of `--override <key name> <override values>`.
+    """
+    if not value or not isinstance(value, list | tuple):
+        return []
+
+    overrides: list[tuple[str, list[Any]]] = []
+    for k, v in value:
+        values_list = parse_list(ctx, param, v)
+        if values_list is None:
+            continue
+
+        values_parsed = parse_arguments(ctx, param, values_list)
+        overrides.append((k, values_parsed))
+
+    return overrides_to_benchmarks(*overrides)
+
+
+def parse_kv_str(
+    ctx: click.Context, param: click.Parameter, value: str | tuple[str, ...] | list[str]
+):
+    """
+    Parse a key=value string into a dictionary.
+
+    :param ctx: Click context
+    :param param: Click parameter
+    :param value: The input string to parse
+    :return: Dictionary with the parsed key-value pair, or None if input is None
+    :raises click.BadParameter: When parsing fails or the format is invalid
+    """
+    if isinstance(value, list | tuple):
+        return [parse_kv_str(ctx, param, v) for v in value]
+
+    try:
+        key, val = value.split("=", 1)
+        return key, val
+    except ValueError as e:
+        raise click.BadParameter(
+            f"Invalid key=value format for '{value}'. Expected format is 'key=value'."
+        ) from e

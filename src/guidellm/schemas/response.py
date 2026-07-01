@@ -15,8 +15,13 @@ from guidellm.schemas.base import StandardBaseModel
 from guidellm.schemas.info import RequestInfo
 from guidellm.schemas.request import GenerationRequest, UsageMetrics
 from guidellm.schemas.request_stats import GenerativeRequestStats
+from guidellm.schemas.tool_call import ToolCall, ToolCallFunction
 
-__all__ = ["GenerationResponse"]
+__all__ = [
+    "GenerationResponse",
+    "ToolCall",
+    "ToolCallFunction",
+]
 
 
 class GenerationResponse(StandardBaseModel):
@@ -24,8 +29,8 @@ class GenerationResponse(StandardBaseModel):
     Response model for backend generation operations.
 
     Captures the output and metrics from a generation request, providing structured
-    data for text output, token usage statistics, and compilation of detailed
-    request statistics for analysis and monitoring purposes.
+    data for text output, tool call payloads, token usage statistics, and compilation
+    of detailed request statistics for analysis and monitoring purposes.
 
     Example:
     ::
@@ -51,6 +56,20 @@ class GenerationResponse(StandardBaseModel):
     text: str | None = Field(
         default=None,
         description="The generated response text.",
+    )
+    reasoning_text: str | None = Field(
+        default=None,
+        description=(
+            "Reasoning/chain-of-thought text emitted before the content. "
+            "Not included in multi-turn history unless explicitly enabled."
+        ),
+    )
+    tool_calls: list[ToolCall] | None = Field(
+        default=None,
+        description=(
+            "Raw tool call payloads from the model response, each containing "
+            "id, type, and function (name + arguments) in OpenAI format."
+        ),
     )
     input_metrics: UsageMetrics = Field(
         default_factory=UsageMetrics,
@@ -88,9 +107,14 @@ class GenerationResponse(StandardBaseModel):
             raise ValueError("Mismatched request IDs between info and response.")
 
         if info.status != "completed":
-            # clear out request output metrics if the request failed since
-            # those are not valid
+            # Clear out request output metrics if the request failed since
+            # those are not valid.  Preserve tool_call_count=0 when the
+            # request expected a tool call so errored-request statistics
+            # still contribute to the tool call metrics table.
+            expected_tool_call = request.expects_tool_call
             request.output_metrics = UsageMetrics()
+            if expected_tool_call:
+                request.output_metrics.tool_call_count = 0
 
         base_input = request.input_metrics if prefer_response else self.input_metrics
         override_input = (
@@ -110,11 +134,22 @@ class GenerationResponse(StandardBaseModel):
             if value is not None:
                 output_metrics_dict[key] = value
 
+        # If tool calls were expected but none were recorded (either because
+        # the request errored or the model produced none with ignore_continue),
+        # set tool_call_count=0 so the metrics table still appears.
+        if (
+            request.expects_tool_call
+            and output_metrics_dict.get("tool_call_count") is None
+        ):
+            output_metrics_dict["tool_call_count"] = 0
+
         return GenerativeRequestStats(
             request_id=self.request_id,
             response_id=self.response_id,
             request_args=self.request_args,
             output=self.text,
+            reasoning_output=self.reasoning_text,
+            tool_calls=self.tool_calls,
             info=info,
             input_metrics=UsageMetrics(**input_metrics_dict),
             output_metrics=UsageMetrics(**output_metrics_dict),

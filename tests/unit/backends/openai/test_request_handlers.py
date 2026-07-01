@@ -14,9 +14,12 @@ from guidellm.backends.openai.request_handlers import (
     EmbeddingsRequestHandler,
     OpenAIRequestHandler,
     OpenAIRequestHandlerFactory,
+    OpenAIWSRequestHandlerFactory,
     PoolingRequestHandler,
+    RealtimeTranscriptionWSRequestHandler,
     ResponsesRequestHandler,
     TextCompletionsRequestHandler,
+    WSEventResult,
 )
 from guidellm.schemas import GenerationRequest, GenerationResponse, UsageMetrics
 from guidellm.utils.registry import RegistryMixin
@@ -109,6 +112,259 @@ class TestOpenAIRequestHandlerFactory:
         """
         with pytest.raises(ValueError, match="No response handler registered"):
             OpenAIRequestHandlerFactory.create("invalid_type")
+
+
+class TestRealtimeTranscriptionWSRequestHandler:
+    """Realtime WebSocket path handler (``/v1/realtime``)."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_pcm16_chunks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Avoid torchcodec decode when format() PCM-encodes audio.
+
+        ## WRITTEN BY AI ##
+        """
+        monkeypatch.setattr(
+            "guidellm.backends.openai.request_handlers.pcm16_append_b64_chunks",
+            lambda *a, **k: ["YWFhYQ=="],
+        )
+
+    def test_extract_single_audio_requires_one_column(self) -> None:
+        handler = RealtimeTranscriptionWSRequestHandler()
+        req = GenerationRequest(
+            request_id="r1",
+            columns={"audio_column": []},
+        )
+        with pytest.raises(ValueError, match="exactly one audio_column"):
+            handler.extract_single_audio(req)
+
+    def test_format_builds_body(self) -> None:
+        """format() validates audio and attaches PCM chunks to body.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        req = GenerationRequest(
+            request_id="r1",
+            columns={"audio_column": [{"audio": b"x"}]},
+        )
+        args = handler.format(
+            req,
+            model="m1",
+            websocket_path="/v1/realtime",
+            chunk_samples=1600,
+        )
+        assert args.body == {
+            "model": "m1",
+            "websocket_path": "/v1/realtime",
+            "chunk_samples": 1600,
+            "audio_chunks": ["YWFhYQ=="],
+        }
+
+    def test_ws_factory_create(self) -> None:
+        """OpenAIWSRequestHandlerFactory returns RealtimeTranscriptionWSRequestHandler.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = OpenAIWSRequestHandlerFactory.create("/v1/realtime")
+        assert isinstance(handler, RealtimeTranscriptionWSRequestHandler)
+
+    def test_http_factory_rejects_realtime_path(self) -> None:
+        """Realtime path is registered on the WS factory only.
+
+        ## WRITTEN BY AI ##
+        """
+        with pytest.raises(ValueError, match="No response handler registered"):
+            OpenAIRequestHandlerFactory.create("/v1/realtime")
+
+    def test_ws_factory_rejects_unknown_path(self) -> None:
+        """Unknown WS paths raise ValueError from the WS factory.
+
+        ## WRITTEN BY AI ##
+        """
+        with pytest.raises(ValueError, match="No WebSocket handler registered"):
+            OpenAIWSRequestHandlerFactory.create("/v1/unknown")
+
+    def test_add_streaming_event_delta_returns_content(self) -> None:
+        """transcription.delta with content returns CONTENT.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        result = handler.add_streaming_event(
+            {"type": "transcription.delta", "delta": "hi"}
+        )
+        assert result.kind is WSEventResult.CONTENT
+        assert result.content_tokens == 1
+        assert handler.streaming_text == "hi"
+
+    def test_add_streaming_event_empty_delta_returns_request_iteration(self) -> None:
+        """Empty transcription.delta returns REQUEST_ITERATION.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        result = handler.add_streaming_event(
+            {"type": "transcription.delta", "delta": ""}
+        )
+        assert result.kind is WSEventResult.REQUEST_ITERATION
+        assert result.content_tokens == 0
+        assert handler.streaming_text == ""
+
+    def test_add_streaming_event_done_returns_stream_end(self) -> None:
+        """transcription.done returns STREAM_END and stores usage.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        handler.add_streaming_event({"type": "transcription.delta", "delta": "a"})
+        result = handler.add_streaming_event(
+            {
+                "type": "transcription.done",
+                "text": "hello",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+            }
+        )
+        assert result.kind is WSEventResult.STREAM_END
+        assert handler._streaming_usage == {
+            "prompt_tokens": 5,
+            "completion_tokens": 1,
+        }
+        assert handler.streaming_text == "hello"
+
+    def test_add_streaming_event_done_without_text_joins_deltas(self) -> None:
+        """transcription.done without text keeps accumulated deltas.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        handler.add_streaming_event({"type": "transcription.delta", "delta": "hel"})
+        handler.add_streaming_event({"type": "transcription.delta", "delta": "lo"})
+        handler.add_streaming_event(
+            {
+                "type": "transcription.done",
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+            }
+        )
+        assert handler.streaming_text == "hello"
+
+    def test_add_streaming_event_done_only_sets_text(self) -> None:
+        """Single transcription.done event sets text without prior deltas.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        handler.add_streaming_event(
+            {
+                "type": "transcription.done",
+                "text": "only",
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            }
+        )
+        assert handler.streaming_text == "only"
+
+    def test_add_streaming_event_error_raises(self) -> None:
+        """error events raise RuntimeError.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        with pytest.raises(RuntimeError, match="401: auth failed"):
+            handler.add_streaming_event(
+                {"type": "error", "error": {"message": "auth failed", "code": "401"}}
+            )
+
+    @pytest.mark.parametrize(
+        ("error_payload", "expected"),
+        [
+            (None, "WebSocket error"),
+            ("", "WebSocket error"),
+            ("plain failure", "plain failure"),
+            ({"code": "500"}, "500"),
+        ],
+        ids=["none", "empty", "plain_string", "code_only"],
+    )
+    def test_add_streaming_event_error_formats_payload(
+        self, error_payload: object, expected: str
+    ) -> None:
+        """format_ws_error branches are surfaced through error events.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        with pytest.raises(RuntimeError, match=expected):
+            handler.add_streaming_event({"type": "error", "error": error_payload})
+
+    def test_add_streaming_event_unknown_returns_ignored(self) -> None:
+        """Unrecognized event types return IGNORED.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        result = handler.add_streaming_event({"type": "noise.event"})
+        assert result.kind is WSEventResult.IGNORED
+        assert result.content_tokens == 0
+        assert handler.streaming_text == ""
+        assert handler._streaming_usage is None
+
+    def test_compile_streaming_partial_without_done(self) -> None:
+        """compile_streaming works with deltas only (cancel/partial path).
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        req = GenerationRequest(
+            request_id="r1",
+            columns={"audio_column": [{"audio": b"x"}]},
+        )
+        args = handler.format(
+            req,
+            model="m1",
+            websocket_path="/v1/realtime",
+            chunk_samples=1600,
+        )
+        handler.add_streaming_event({"type": "transcription.delta", "delta": "partial"})
+        resp = handler.compile_streaming(req, args)
+        assert resp.text == "partial"
+        assert resp.request_id == "r1"
+        assert handler._streaming_usage is None
+        assert resp.input_metrics.audio_tokens is None
+        assert resp.output_metrics.text_tokens is None
+
+    def test_compile_streaming_builds_response(self) -> None:
+        """compile_streaming assembles text and metrics.
+
+        ## WRITTEN BY AI ##
+        """
+        handler = RealtimeTranscriptionWSRequestHandler()
+        req = GenerationRequest(
+            request_id="r1",
+            columns={"audio_column": [{"audio": b"x"}]},
+        )
+        args = handler.format(
+            req,
+            model="m1",
+            websocket_path="/v1/realtime",
+            chunk_samples=1600,
+        )
+        handler.add_streaming_event({"type": "transcription.delta", "delta": "hi"})
+        handler.add_streaming_event(
+            {
+                "type": "transcription.done",
+                "text": "hi",
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 1,
+                    "total_tokens": 6,
+                },
+            }
+        )
+        resp = handler.compile_streaming(req, args)
+        assert resp.text == "hi"
+        assert resp.request_id == "r1"
+        assert resp.input_metrics.audio_tokens == 5
+        assert resp.output_metrics.text_tokens == 1
+        assert '"model":"m1"' in resp.request_args
+        assert "audio_chunks" not in resp.request_args
 
 
 class TestTextCompletionsRequestHandler:
@@ -428,6 +684,27 @@ class TestTextCompletionsRequestHandler:
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
+        "line",
+        [
+            'data: {"error": {"message": "TimeoutError", "type": '
+            '"GatewayTimeout", "code": 504}}',
+            'data: {"error": "boom"}',
+        ],
+    )
+    def test_extract_line_data_streaming_error(self, valid_instances, line):
+        """Streaming SSE error payloads must surface as request failures.
+
+        Some OpenAI-compatible servers return HTTP 200 and report errors via
+        the stream body (e.g. vLLM's ``create_streaming_error_response``)
+        rather than an HTTP status, which would otherwise be recorded as a
+        successful empty generation.
+        """
+        instance = valid_instances
+        with pytest.raises(ValueError, match="Streaming response returned an error"):
+            instance.extract_line_data(line)
+
+    @pytest.mark.smoke
+    @pytest.mark.parametrize(
         ("response", "expected_choices", "expected_usage"),
         [
             (
@@ -679,11 +956,9 @@ class TestChatCompletionsRequestHandler:
 
         result = instance.format(data)
 
-        assert len(result.body["messages"]) == 2
+        assert len(result.body["messages"]) == 1
         assert result.body["messages"][0]["role"] == "system"
         assert result.body["messages"][0]["content"] == "You are a helpful assistant."
-        assert result.body["messages"][1]["role"] == "user"
-        assert result.body["messages"][1]["content"] == []
 
     @pytest.mark.sanity
     def test_format_messages_image(self, valid_instances):
@@ -928,6 +1203,433 @@ class TestChatCompletionsRequestHandler:
         assert response.text == expected_text
         assert response.input_metrics.text_tokens == expected_input_tokens
         assert response.output_metrics.text_tokens == expected_output_tokens
+
+    @pytest.mark.sanity
+    def test_streaming_reasoning_tokens(self, valid_instances, generation_request):
+        """Test that reasoning tokens are properly detected for TTFT measurement.
+
+        Reasoning-capable models (e.g., DeepSeek-R1, o1) emit delta.reasoning
+        before delta.content. This test verifies that the first reasoning token
+        triggers the updated flag, ensuring accurate TTFT measurement.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        lines = [
+            # First chunk has reasoning token
+            (
+                'data: {"id": "chatcmpl-123", "choices": '
+                '[{"index": 0, "delta": {"reasoning": "Okay"}}], "usage": {}}'
+            ),
+            # More reasoning tokens
+            'data: {"choices": [{"delta": {"reasoning": ", let me"}}], "usage": {}}',
+            'data: {"choices": [{"delta": {"reasoning": " think..."}}], "usage": {}}',
+            # Finally content tokens
+            'data: {"choices": [{"delta": {"content": "Hello"}}], "usage": {}}',
+            (
+                'data: {"choices": [{"delta": {"content": " world!"}}], '
+                '"usage": {"prompt_tokens": 5, "completion_tokens": 10}}'
+            ),
+            "data: [DONE]",
+        ]
+
+        updated_count = 0
+        first_update_on_line = None
+        for idx, line in enumerate(lines):
+            result = instance.add_streaming_line(line)
+            if result == 1:
+                updated_count += 1
+                if first_update_on_line is None:
+                    first_update_on_line = idx
+            elif result is None:
+                break
+
+        # Verify that the first update happened on the first reasoning token (line 0)
+        assert first_update_on_line == 0, (
+            f"Expected first token detection on line 0 (reasoning token), "
+            f"but got {first_update_on_line}"
+        )
+
+        # Verify all chunks with content were counted (5 lines with tokens)
+        assert updated_count == 5
+
+        response = instance.compile_streaming(generation_request, arguments)
+        # Reasoning tokens should NOT appear in response.text; only content does
+        assert "Okay" not in response.text
+        assert "let me think..." not in response.text
+        assert response.text == "Hello world!"
+        assert response.input_metrics.text_tokens == 5
+        assert response.output_metrics.text_tokens == 10
+
+    @pytest.mark.sanity
+    def test_streaming_both_reasoning_and_content_in_same_chunk(
+        self, valid_instances, generation_request
+    ):
+        """Test handling chunks with both reasoning and content fields.
+
+        Edge case: verify that if a chunk contains both delta.reasoning
+        and delta.content, reasoning triggers the update flag but only
+        content is captured in the response text.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        lines = [
+            # Chunk with both reasoning and content (edge case)
+            (
+                'data: {"choices": [{"delta": '
+                '{"reasoning": "Let me think...", "content": "Answer: "}}], '
+                '"usage": {}}'
+            ),
+            'data: {"choices": [{"delta": {"content": "42"}}], "usage": {}}',
+            "data: [DONE]",
+        ]
+
+        updated_count = 0
+        for line in lines:
+            result = instance.add_streaming_line(line)
+            if result is None:
+                break
+            if result > 0:
+                updated_count += 1
+
+        # First chunk has both reasoning and content (counts as 1 iteration)
+        # Second chunk has content only (counts as 1 iteration)
+        assert updated_count == 2
+
+        response = instance.compile_streaming(generation_request, arguments)
+        # Reasoning text should NOT appear; only content is captured
+        assert "Let me think..." not in response.text
+        assert response.text == "Answer: 42"
+
+    @pytest.mark.sanity
+    def test_streaming_captures_reasoning_text(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify reasoning text is accumulated on response.reasoning_text
+        during streaming, separate from response.text.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        lines = [
+            'data: {"choices": [{"delta": {"reasoning": "Step 1. "}}], "usage": {}}',
+            'data: {"choices": [{"delta": {"reasoning": "Step 2."}}], "usage": {}}',
+            'data: {"choices": [{"delta": {"content": "Final answer"}}], "usage": {}}',
+            "data: [DONE]",
+        ]
+        for line in lines:
+            result = instance.add_streaming_line(line)
+            if result is None:
+                break
+
+        response = instance.compile_streaming(generation_request, arguments)
+        assert response.text == "Final answer"
+        assert response.reasoning_text == "Step 1. Step 2."
+
+    @pytest.mark.sanity
+    def test_non_streaming_captures_reasoning_text(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify compile_non_streaming extracts reasoning from the message.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        api_response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "reasoning": "Let me think step by step.",
+                        "content": "The answer is 42.",
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 15},
+        }
+        response = instance.compile_non_streaming(
+            generation_request, arguments, api_response
+        )
+        assert response.text == "The answer is 42."
+        assert response.reasoning_text == "Let me think step by step."
+
+    @pytest.mark.sanity
+    def test_format_excludes_reasoning_from_history_by_default(self, valid_instances):
+        """
+        By default (multiturn_reasoning=False), reasoning_text
+        should not appear in the assistant message content.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="4",
+            reasoning_text="Let me add 2 and 2.",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+        )
+
+        # Find the assistant message in the history
+        assistant_msgs = [
+            m for m in result.body["messages"] if m.get("role") == "assistant"
+        ]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["content"] == "4"
+        assert "Let me add" not in assistant_msgs[0]["content"]
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_in_history_when_enabled(self, valid_instances):
+        """
+        When multiturn_reasoning=True, reasoning_text should
+        be wrapped in <think> tags and prepended to the assistant message content.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="4",
+            reasoning_text="Let me add 2 and 2.",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning=True,
+        )
+
+        assistant_msgs = [
+            m for m in result.body["messages"] if m.get("role") == "assistant"
+        ]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["content"] == "<think>Let me add 2 and 2.</think>4"
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_only_response_in_history(self, valid_instances):
+        """
+        When multiturn_reasoning=True and the prior response has
+        reasoning_text but no regular text content, an assistant message
+        should still be injected containing the reasoning.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="",
+            reasoning_text="Let me think about this carefully.",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning=True,
+        )
+
+        assistant_msgs = [
+            m for m in result.body["messages"] if m.get("role") == "assistant"
+        ]
+        assert len(assistant_msgs) == 1
+        assert (
+            assistant_msgs[0]["content"]
+            == "<think>Let me think about this carefully.</think>"
+        )
+
+    @pytest.mark.sanity
+    def test_format_drops_reasoning_only_response_from_history_by_default(
+        self, valid_instances
+    ):
+        """
+        When multiturn_reasoning=False (default) and the prior
+        response has reasoning_text but no regular text content, no
+        assistant message should be injected.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="",
+            reasoning_text="Let me think about this carefully.",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+        )
+
+        assistant_msgs = [
+            m for m in result.body["messages"] if m.get("role") == "assistant"
+        ]
+        assert len(assistant_msgs) == 0
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_with_custom_template(self, valid_instances):
+        """
+        When multiturn_reasoning is a custom format string, reasoning_text
+        should be wrapped using that template.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="4",
+            reasoning_text="Let me add 2 and 2.",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+        template = "Here is my thought process:{reasoning}Here is my response:"
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning=template,
+        )
+
+        assistant_msgs = [
+            m for m in result.body["messages"] if m.get("role") == "assistant"
+        ]
+        assert len(assistant_msgs) == 1
+        expected = "Here is my thought process:Let me add 2 and 2.Here is my response:4"
+        assert assistant_msgs[0]["content"] == expected
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_raw_template(self, valid_instances):
+        """
+        When multiturn_reasoning='{reasoning}', reasoning_text should be
+        prepended with no extra delimiters (raw mode).
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="4",
+            reasoning_text="Let me add 2 and 2.",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is 3+3?"]},
+        )
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning="{reasoning}",
+        )
+
+        assistant_msgs = [
+            m for m in result.body["messages"] if m.get("role") == "assistant"
+        ]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["content"] == "Let me add 2 and 2.4"
+
+    @pytest.mark.sanity
+    def test_last_iteration_had_content_reasoning_then_content(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify last_iteration_had_content tracks content vs reasoning deltas.
+
+        Reasoning-only iterations set the flag to False; content sets it True.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        instance.format(generation_request)
+
+        # Initial state before any streaming
+        assert instance.last_iteration_had_content is False
+
+        # Reasoning-only delta
+        instance.add_streaming_line(
+            'data: {"choices": [{"delta": {"reasoning": "thinking..."}}], "usage": {}}'
+        )
+        assert instance.last_iteration_had_content is False
+
+        # Content delta
+        instance.add_streaming_line(
+            'data: {"choices": [{"delta": {"content": "Hello"}}], "usage": {}}'
+        )
+        assert instance.last_iteration_had_content is True
+
+    @pytest.mark.sanity
+    def test_last_iteration_had_content_tool_call(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify tool call deltas set last_iteration_had_content to True.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        instance.format(generation_request)
+
+        tc_line = (
+            'data: {"choices": [{"delta": {"tool_calls": '
+            '[{"index": 0, "id": "call_1", "type": "function", '
+            '"function": {"name": "foo", "arguments": ""}}]}}], "usage": {}}'
+        )
+        instance.add_streaming_line(tc_line)
+        assert instance.last_iteration_had_content is True
 
     # Tool call response handling tests
 
@@ -1266,15 +1968,34 @@ class TestChatCompletionsRequestHandler:
         assert response.output_metrics.tool_call_count is None
 
     @pytest.mark.smoke
-    def test_initialization_has_streaming_tool_call_indices(self, valid_instances):
+    def test_initialization_has_streaming_tool_calls(self, valid_instances):
         """
-        Test ChatCompletionsRequestHandler initializes streaming_tool_call_indices.
+        Test ChatCompletionsRequestHandler initializes streaming_tool_calls.
 
         ## WRITTEN BY AI ##
         """
         instance = valid_instances
-        assert hasattr(instance, "streaming_tool_call_indices")
-        assert instance.streaming_tool_call_indices == set()
+        assert hasattr(instance, "streaming_tool_calls")
+        assert instance.streaming_tool_calls == {}
+
+    @pytest.mark.sanity
+    def test_format_strips_tool_choice_without_tools(self, valid_instances):
+        """
+        Test that tool_choice from extras is stripped when no tools are present
+        in the request body.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        data = GenerationRequest(
+            columns={"text_column": ["test prompt"]},
+            expects_tool_call=False,
+        )
+
+        result = instance.format(data, extras={"body": {"tool_choice": "required"}})
+
+        assert "tool_choice" not in result.body
+        assert "tools" not in result.body
 
 
 class TestAudioRequestHandler:
@@ -2544,6 +3265,328 @@ class TestResponsesRequestHandler:
         assert response.output_metrics.text_tokens == expected_output_tokens
 
     @pytest.mark.sanity
+    def test_streaming_reasoning_triggers_ttft_not_content(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify Responses API reasoning events trigger TTFT (return 1)
+        but set last_iteration_had_content to False, matching Chat
+        Completions parity for TTFOT measurement.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        instance.format(generation_request)
+
+        assert instance.last_iteration_had_content is False
+
+        # Reasoning summary delta -- should return 1 (TTFT) but not content
+        result = instance.add_streaming_line(
+            'data: {"type": "response.reasoning_summary_text.delta", '
+            '"delta": "Let me think..."}'
+        )
+        assert result == 1
+        assert instance.last_iteration_had_content is False
+
+        # Output text delta -- now content flag flips to True
+        result = instance.add_streaming_line(
+            'data: {"type": "response.output_text.delta", "delta": "Hello"}'
+        )
+        assert result == 1
+        assert instance.last_iteration_had_content is True
+
+    @pytest.mark.sanity
+    def test_streaming_reasoning_only_leaves_content_false(
+        self, valid_instances, generation_request
+    ):
+        """
+        If a Responses API stream emits only reasoning before completing,
+        last_iteration_had_content stays False.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        instance.format(generation_request)
+
+        instance.add_streaming_line(
+            'data: {"type": "response.reasoning_summary_text.delta", '
+            '"delta": "thinking..."}'
+        )
+        instance.add_streaming_line(
+            'data: {"type": "response.reasoning_summary_text.delta", '
+            '"delta": " more thinking"}'
+        )
+        assert instance.last_iteration_had_content is False
+
+        # Stream completes
+        instance.add_streaming_line(
+            'data: {"type": "response.completed", "response": '
+            '{"id": "resp_1", "usage": {"input_tokens": 5, "output_tokens": 0}}}'
+        )
+        assert instance.last_iteration_had_content is False
+
+    @pytest.mark.sanity
+    def test_streaming_captures_reasoning_text(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify Responses API streaming accumulates reasoning_text on the
+        compiled response.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        lines = [
+            'data: {"type": "response.reasoning_summary_text.delta", '
+            '"delta": "First, "}',
+            'data: {"type": "response.reasoning_summary_text.delta", '
+            '"delta": "consider..."}',
+            'data: {"type": "response.output_text.delta", "delta": "Answer"}',
+            'data: {"type": "response.completed", "response": '
+            '{"id": "resp_1", "usage": {"input_tokens": 5, "output_tokens": 3}}}',
+        ]
+        for line in lines:
+            result = instance.add_streaming_line(line)
+            if result is None:
+                break
+
+        response = instance.compile_streaming(generation_request, arguments)
+        assert response.text == "Answer"
+        assert response.reasoning_text == "First, consider..."
+
+    @pytest.mark.sanity
+    def test_non_streaming_captures_reasoning_text(
+        self, valid_instances, generation_request
+    ):
+        """
+        Verify compile_non_streaming extracts reasoning from Responses API
+        output items with type 'reasoning'.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        api_response = {
+            "id": "resp_1",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [{"text": "Step 1. "}, {"text": "Step 2."}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Final answer"}],
+                },
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        response = instance.compile_non_streaming(
+            generation_request, arguments, api_response
+        )
+        assert response.text == "Final answer"
+        assert response.reasoning_text == "Step 1. Step 2."
+
+    @pytest.mark.sanity
+    def test_format_excludes_reasoning_from_history_by_default(self, valid_instances):
+        """
+        By default, reasoning_text should not appear in the assistant
+        input item content.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Hello"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="World",
+            reasoning_text="Think about greeting.",
+        )
+        data = GenerationRequest(columns={"text_column": ["Follow up"]})
+        result = instance.format(data, history=[(prev_request, prev_response)])
+
+        assistant_items = [
+            item for item in result.body["input"] if item.get("role") == "assistant"
+        ]
+        assert len(assistant_items) == 1
+        assert assistant_items[0]["content"] == "World"
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_in_history_when_enabled(self, valid_instances):
+        """
+        When multiturn_reasoning=True, reasoning_text should be
+        wrapped in <think> tags and prepended to the assistant input item content.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Hello"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="World",
+            reasoning_text="Think about greeting.",
+        )
+        data = GenerationRequest(columns={"text_column": ["Follow up"]})
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning=True,
+        )
+
+        assistant_items = [
+            item for item in result.body["input"] if item.get("role") == "assistant"
+        ]
+        assert len(assistant_items) == 1
+        assert (
+            assistant_items[0]["content"] == "<think>Think about greeting.</think>World"
+        )
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_only_response_in_history(self, valid_instances):
+        """
+        When multiturn_reasoning=True and the prior response has
+        reasoning_text but no regular text content, an assistant input item
+        should still be injected containing the reasoning.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Hello"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="",
+            reasoning_text="Think about greeting.",
+        )
+        data = GenerationRequest(columns={"text_column": ["Follow up"]})
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning=True,
+        )
+
+        assistant_items = [
+            item for item in result.body["input"] if item.get("role") == "assistant"
+        ]
+        assert len(assistant_items) == 1
+        assert assistant_items[0]["content"] == "<think>Think about greeting.</think>"
+
+    @pytest.mark.sanity
+    def test_format_drops_reasoning_only_response_from_history_by_default(
+        self, valid_instances
+    ):
+        """
+        When multiturn_reasoning=False (default) and the prior
+        response has reasoning_text but no regular text content, no
+        assistant input item should be injected.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Hello"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="",
+            reasoning_text="Think about greeting.",
+        )
+        data = GenerationRequest(columns={"text_column": ["Follow up"]})
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+        )
+
+        assistant_items = [
+            item for item in result.body["input"] if item.get("role") == "assistant"
+        ]
+        assert len(assistant_items) == 0
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_with_custom_template(self, valid_instances):
+        """
+        When multiturn_reasoning is a custom format string, reasoning_text
+        should be wrapped using that template in the Responses API input.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Hello"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="World",
+            reasoning_text="Think about greeting.",
+        )
+        data = GenerationRequest(columns={"text_column": ["Follow up"]})
+        template = "Here is my thought process:{reasoning}Here is my response:"
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning=template,
+        )
+
+        assistant_items = [
+            item for item in result.body["input"] if item.get("role") == "assistant"
+        ]
+        assert len(assistant_items) == 1
+        expected = (
+            "Here is my thought process:Think about greeting.Here is my response:World"
+        )
+        assert assistant_items[0]["content"] == expected
+
+    @pytest.mark.sanity
+    def test_format_includes_reasoning_raw_template(self, valid_instances):
+        """
+        When multiturn_reasoning='{reasoning}', reasoning_text should be
+        prepended with no extra delimiters (raw mode) in the Responses API input.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Hello"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="World",
+            reasoning_text="Think about greeting.",
+        )
+        data = GenerationRequest(columns={"text_column": ["Follow up"]})
+        result = instance.format(
+            data,
+            history=[(prev_request, prev_response)],
+            multiturn_reasoning="{reasoning}",
+        )
+
+        assistant_items = [
+            item for item in result.body["input"] if item.get("role") == "assistant"
+        ]
+        assert len(assistant_items) == 1
+        assert assistant_items[0]["content"] == "Think about greeting.World"
+
+    @pytest.mark.sanity
     def test_format_with_history(self, valid_instances):
         """
         Test format builds input with conversation history.
@@ -2623,6 +3666,154 @@ class TestResponsesRequestHandler:
         assert len(input_items) == 1
         assert input_items[0]["role"] == "user"
 
+    @pytest.mark.sanity
+    def test_format_with_server_history_tool_calls(self, valid_instances):
+        """
+        Test format includes function_call_output items when server_history
+        is enabled and the last response had tool calls, but does NOT include
+        function_call items (the server already has those).
+
+        ## WRITTEN BY AI ##
+        """
+        from guidellm.schemas.tool_call import ToolCall, ToolCallFunction
+
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["Call get_weather for SF"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text=None,
+            response_id="resp_tool_001",
+            tool_calls=[
+                ToolCall(
+                    id="call_xyz",
+                    type="function",
+                    function=ToolCallFunction(
+                        name="get_weather",
+                        arguments='{"location": "SF"}',
+                    ),
+                )
+            ],
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["What is the weather?"]},
+        )
+
+        result = instance.format(
+            data, history=[(prev_request, prev_response)], server_history=True
+        )
+
+        assert result.body["previous_response_id"] == "resp_tool_001"
+        input_items = result.body["input"]
+
+        # function_call_output should be first, then the user message
+        fco_items = [i for i in input_items if i.get("type") == "function_call_output"]
+        assert len(fco_items) == 1
+        assert fco_items[0]["call_id"] == "call_xyz"
+        assert fco_items[0]["output"] == '{"status": "ok"}'
+
+        # function_call items must NOT be present (server already has them)
+        fc_items = [i for i in input_items if i.get("type") == "function_call"]
+        assert len(fc_items) == 0
+
+        # User message should still be present
+        user_items = [i for i in input_items if i.get("role") == "user"]
+        assert len(user_items) == 1
+
+    @pytest.mark.sanity
+    def test_format_with_server_history_tool_calls_custom_response(
+        self, valid_instances
+    ):
+        """
+        Test format sources tool response content from tool_response_column
+        on the previous request when using server_history with tool calls.
+
+        ## WRITTEN BY AI ##
+        """
+        from guidellm.schemas.tool_call import ToolCall, ToolCallFunction
+
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={
+                "text_column": ["Call get_weather"],
+                "tool_response_column": ['{"temp": 72, "unit": "F"}'],
+            },
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text=None,
+            response_id="resp_tool_002",
+            tool_calls=[
+                ToolCall(
+                    id="call_custom",
+                    type="function",
+                    function=ToolCallFunction(
+                        name="get_weather",
+                        arguments='{"location": "NYC"}',
+                    ),
+                )
+            ],
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["Summarize the weather"]},
+        )
+
+        result = instance.format(
+            data, history=[(prev_request, prev_response)], server_history=True
+        )
+
+        input_items = result.body["input"]
+        fco_items = [i for i in input_items if i.get("type") == "function_call_output"]
+        assert len(fco_items) == 1
+        assert fco_items[0]["call_id"] == "call_custom"
+        assert fco_items[0]["output"] == '{"temp": 72, "unit": "F"}'
+
+    @pytest.mark.sanity
+    def test_format_with_server_history_no_tool_calls(self, valid_instances):
+        """
+        Test format with server_history does NOT include function_call_output
+        items when the previous response was plain text (regression check).
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+
+        prev_request = GenerationRequest(
+            columns={"text_column": ["What is 2+2?"]},
+        )
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="4",
+            response_id="resp_plain",
+        )
+
+        data = GenerationRequest(
+            columns={"text_column": ["And 3+3?"]},
+        )
+
+        result = instance.format(
+            data, history=[(prev_request, prev_response)], server_history=True
+        )
+
+        assert result.body["previous_response_id"] == "resp_plain"
+        input_items = result.body["input"]
+
+        # No function_call_output items should be present
+        fco_items = [i for i in input_items if i.get("type") == "function_call_output"]
+        assert len(fco_items) == 0
+
+        # Only the user message
+        assert len(input_items) == 1
+        assert input_items[0]["role"] == "user"
+
     # Tool call response handling tests
 
     @pytest.mark.sanity
@@ -2658,6 +3849,13 @@ class TestResponsesRequestHandler:
         assert result.output_metrics.tool_call_tokens == 15
         assert result.output_metrics.mixed_content_tool_tokens is None
         assert result.output_metrics.tool_call_count == 1
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+        tc = result.tool_calls[0]
+        assert tc.id == "call_abc123"
+        assert tc.type == "function"
+        assert tc.function.name == "get_weather"
+        assert tc.function.arguments == '{"location": "SF"}'
 
     @pytest.mark.sanity
     def test_non_streaming_tool_calls_content_preferred(
@@ -2741,6 +3939,13 @@ class TestResponsesRequestHandler:
         assert result.output_metrics.tool_call_tokens == 20
         assert result.output_metrics.mixed_content_tool_tokens is None
         assert result.output_metrics.tool_call_count == 2
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 2
+        assert result.tool_calls[0].id == "call_1"
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert result.tool_calls[1].id == "call_2"
+        assert result.tool_calls[1].function.name == "get_time"
+        assert result.tool_calls[1].function.arguments == '{"timezone": "PST"}'
 
     @pytest.mark.sanity
     def test_non_streaming_no_tool_calls_unchanged(
@@ -2825,6 +4030,13 @@ class TestResponsesRequestHandler:
         assert response.output_metrics.tool_call_tokens == 12
         assert response.output_metrics.mixed_content_tool_tokens is None
         assert response.output_metrics.tool_call_count == 1
+        assert response.tool_calls is not None
+        assert len(response.tool_calls) == 1
+        tc = response.tool_calls[0]
+        assert tc.id == "call_abc"
+        assert tc.type == "function"
+        assert tc.function.name == "get_weather"
+        assert tc.function.arguments == '{"loc":"SF"}'
 
     @pytest.mark.sanity
     def test_streaming_multiple_tool_calls(self, valid_instances, generation_request):
@@ -2962,15 +4174,238 @@ class TestResponsesRequestHandler:
         assert response.output_metrics.tool_call_count is None
 
     @pytest.mark.smoke
-    def test_initialization_has_streaming_tool_call_indices(self, valid_instances):
+    def test_initialization_has_streaming_tool_calls(self, valid_instances):
         """
-        Test ResponsesRequestHandler initializes streaming_tool_call_indices.
+        Test ResponsesRequestHandler initializes streaming_tool_calls.
 
         ## WRITTEN BY AI ##
         """
         instance = valid_instances
-        assert hasattr(instance, "streaming_tool_call_indices")
-        assert instance.streaming_tool_call_indices == set()
+        assert hasattr(instance, "streaming_tool_calls")
+        assert instance.streaming_tool_calls == {}
+
+    @pytest.mark.sanity
+    def test_format_tool_call_overrides(self, valid_instances):
+        """
+        Test _apply_tool_call_overrides injects tools, sets tool_choice, and
+        removes incompatible keys on tool-call turns.  Tools provided in Chat
+        Completions format are normalised to flat Responses API format.
+
+        ## WRITTEN BY AI ##
+        """
+        import json as stdlib_json
+
+        instance = valid_instances
+        chat_tools = [
+            {"type": "function", "function": {"name": "fn", "parameters": {}}}
+        ]
+        expected_tools = [{"type": "function", "name": "fn", "parameters": {}}]
+        data = GenerationRequest(
+            columns={"tools_column": [stdlib_json.dumps(chat_tools)]},
+            expects_tool_call=True,
+        )
+
+        result = instance.format(data)
+
+        assert result.body["tools"] == expected_tools
+        assert result.body["tool_choice"] == "required"
+        assert "ignore_eos" not in result.body
+        assert "stop" not in result.body
+        assert "max_output_tokens" not in result.body
+
+    @pytest.mark.sanity
+    def test_format_tool_choice_none_on_non_tool_turn(self, valid_instances):
+        """
+        Test that non-tool turns set tool_choice to 'none' when tools are
+        present from extras.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        tools = [{"type": "function", "function": {"name": "fn", "parameters": {}}}]
+        data = GenerationRequest(expects_tool_call=False)
+
+        result = instance.format(data, extras={"body": {"tools": tools}})
+
+        assert result.body["tools"] == tools
+        assert result.body["tool_choice"] == "none"
+
+    @pytest.mark.sanity
+    def test_format_strips_tool_choice_without_tools(self, valid_instances):
+        """
+        Test that tool_choice from extras is stripped when no tools are present
+        in the request body.
+
+        ## WRITTEN BY AI ##
+        """
+        instance = valid_instances
+        data = GenerationRequest(
+            columns={"text_column": ["test prompt"]},
+            expects_tool_call=False,
+        )
+
+        result = instance.format(data, extras={"body": {"tool_choice": "required"}})
+
+        assert "tool_choice" not in result.body
+        assert "tools" not in result.body
+
+    @pytest.mark.sanity
+    def test_build_input_items_replays_tool_calls(self, valid_instances):
+        """
+        Test _build_input_items converts ToolCall objects to
+        Responses API function_call items and appends function_call_output
+        items for multi-turn replay.
+
+        ## WRITTEN BY AI ##
+        """
+        from guidellm.schemas.tool_call import ToolCall, ToolCallFunction
+
+        instance = valid_instances
+        data = GenerationRequest(
+            columns={"text_column": ["follow-up question"]},
+        )
+        response = GenerationResponse(
+            request_id="req-1",
+            request_args="{}",
+            tool_calls=[
+                ToolCall(
+                    id="call_abc",
+                    type="function",
+                    function=ToolCallFunction(
+                        name="get_weather",
+                        arguments='{"loc": "SF"}',
+                    ),
+                )
+            ],
+        )
+
+        items = instance._build_input_items(data, response, [])
+
+        fc_items = [i for i in items if i.get("type") == "function_call"]
+        assert len(fc_items) == 1
+        assert fc_items[0]["call_id"] == "call_abc"
+        assert fc_items[0]["name"] == "get_weather"
+        assert fc_items[0]["arguments"] == '{"loc": "SF"}'
+
+        fco_items = [i for i in items if i.get("type") == "function_call_output"]
+        assert len(fco_items) == 1
+        assert fco_items[0]["call_id"] == "call_abc"
+        assert fco_items[0]["output"] == '{"status": "ok"}'
+
+
+class TestEnsureChatCompletionsTool:
+    """Tests for ChatCompletionsRequestHandler._ensure_tool_format normalizer.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.mark.smoke
+    def test_passthrough_native_format(self):
+        """
+        Chat Completions-format tools are returned unchanged.
+
+        ## WRITTEN BY AI ##
+        """
+        tool = {
+            "type": "function",
+            "function": {"name": "fn", "description": "d", "parameters": {}},
+        }
+        assert ChatCompletionsRequestHandler._ensure_tool_format(tool) == tool
+
+    @pytest.mark.smoke
+    def test_converts_responses_format(self):
+        """
+        Responses API-format tools are wrapped into the nested ``function`` structure.
+
+        ## WRITTEN BY AI ##
+        """
+        responses_tool = {
+            "type": "function",
+            "name": "fn",
+            "description": "d",
+            "parameters": {"type": "object"},
+            "strict": True,
+        }
+        expected = {
+            "type": "function",
+            "function": {
+                "name": "fn",
+                "description": "d",
+                "parameters": {"type": "object"},
+                "strict": True,
+            },
+        }
+        result = ChatCompletionsRequestHandler._ensure_tool_format(responses_tool)
+        assert result == expected
+
+    @pytest.mark.sanity
+    def test_partial_fields(self):
+        """
+        Only fields present in the source tool are carried over.
+
+        ## WRITTEN BY AI ##
+        """
+        responses_tool = {"type": "function", "name": "fn"}
+        result = ChatCompletionsRequestHandler._ensure_tool_format(responses_tool)
+        assert result == {"type": "function", "function": {"name": "fn"}}
+
+
+class TestEnsureResponsesTool:
+    """Tests for ResponsesRequestHandler._ensure_tool_format normalizer.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.mark.smoke
+    def test_passthrough_native_format(self):
+        """
+        Responses API-format tools are returned unchanged.
+
+        ## WRITTEN BY AI ##
+        """
+        tool = {
+            "type": "function",
+            "name": "fn",
+            "description": "d",
+            "parameters": {},
+        }
+        assert ResponsesRequestHandler._ensure_tool_format(tool) == tool
+
+    @pytest.mark.smoke
+    def test_converts_chat_completions_format(self):
+        """
+        Chat Completions-format tools are flattened to top-level keys.
+
+        ## WRITTEN BY AI ##
+        """
+        chat_tool = {
+            "type": "function",
+            "function": {
+                "name": "fn",
+                "description": "d",
+                "parameters": {"type": "object"},
+                "strict": True,
+            },
+        }
+        expected = {
+            "type": "function",
+            "name": "fn",
+            "description": "d",
+            "parameters": {"type": "object"},
+            "strict": True,
+        }
+        assert ResponsesRequestHandler._ensure_tool_format(chat_tool) == expected
+
+    @pytest.mark.sanity
+    def test_partial_fields(self):
+        """
+        Only fields present in the source function dict are carried over.
+
+        ## WRITTEN BY AI ##
+        """
+        chat_tool = {"type": "function", "function": {"name": "fn"}}
+        result = ResponsesRequestHandler._ensure_tool_format(chat_tool)
+        assert result == {"type": "function", "name": "fn"}
 
 
 class TestPoolingRequestHandler:
@@ -3371,3 +4806,314 @@ class TestEmbeddingsRequestHandler:
             NotImplementedError, match="Embeddings do not support streaming"
         ):
             instance.compile_streaming(request, arguments)
+
+
+class TestChatCompletionsToolChoiceOverride:
+    """Verify tool_choice is overridden to 'none' on non-tool-call turns.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.fixture
+    def handler(self):
+        """
+        ## WRITTEN BY AI ##
+        """
+        return ChatCompletionsRequestHandler()
+
+    @pytest.mark.smoke
+    def test_tool_choice_none_when_expects_false(self, handler):
+        """When expects_tool_call=False and tools come from dataset, tool_choice='none'.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        data = GenerationRequest(
+            columns={
+                "text_column": ["test"],
+                "tools_column": [json.dumps(tools)],
+            },
+            expects_tool_call=False,
+        )
+        extras = {"body": {"tool_choice": "required"}}
+        result = handler.format(data, extras=extras)
+
+        assert result.body["tool_choice"] == "none"
+
+    @pytest.mark.smoke
+    def test_tool_choice_preserved_when_expects_true(self, handler):
+        """When expects_tool_call=True, the configured tool_choice is kept.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        data = GenerationRequest(
+            columns={
+                "text_column": ["test"],
+                "tools_column": [json.dumps(tools)],
+            },
+            expects_tool_call=True,
+        )
+        extras = {"body": {"tool_choice": "required"}}
+        result = handler.format(data, extras=extras)
+
+        assert result.body["tool_choice"] == "required"
+
+    @pytest.mark.sanity
+    def test_auto_tool_choice_preserved_when_expects_true(self, handler):
+        """When expects_tool_call=True with auto mode, tool_choice stays 'auto'.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        data = GenerationRequest(
+            columns={
+                "text_column": ["test"],
+                "tools_column": [json.dumps(tools)],
+            },
+            expects_tool_call=True,
+        )
+        extras = {"body": {"tool_choice": "auto"}}
+        result = handler.format(data, extras=extras)
+
+        assert result.body["tool_choice"] == "auto"
+
+    @pytest.mark.sanity
+    def test_no_override_without_tools(self, handler):
+        """Without tools in body, no tool_choice override happens.
+
+        ## WRITTEN BY AI ##
+        """
+        data = GenerationRequest(
+            columns={"text_column": ["test"]},
+            expects_tool_call=False,
+        )
+        result = handler.format(data)
+
+        assert "tool_choice" not in result.body
+
+    @pytest.mark.sanity
+    def test_per_request_tools_deserialized_from_json(self, handler):
+        """JSON-serialized tools from synthetic data are deserialized.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+
+        tools = [{"type": "function", "function": {"name": "get_data"}}]
+        data = GenerationRequest(
+            columns={
+                "text_column": ["test"],
+                "tools_column": [json.dumps(tools)],
+            },
+            expects_tool_call=True,
+        )
+        result = handler.format(data)
+
+        assert result.body["tools"] == tools
+
+    @pytest.mark.smoke
+    def test_max_completion_tokens_stripped_on_tool_call_turn(self, handler):
+        """On tool-call turns, max_completion_tokens is removed so the model
+        can finish producing valid tool call JSON without truncation.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        data = GenerationRequest(
+            columns={
+                "text_column": ["test"],
+                "tools_column": [json.dumps(tools)],
+            },
+            expects_tool_call=True,
+            output_metrics=UsageMetrics(text_tokens=100),
+        )
+        result = handler.format(data)
+
+        assert "max_completion_tokens" not in result.body
+        assert "max_tokens" not in result.body
+
+    @pytest.mark.smoke
+    def test_max_completion_tokens_kept_on_plain_text_turn(self, handler):
+        """On the final plain-text turn, max_completion_tokens is preserved.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        data = GenerationRequest(
+            columns={
+                "text_column": ["test"],
+                "tools_column": [json.dumps(tools)],
+            },
+            expects_tool_call=False,
+            output_metrics=UsageMetrics(text_tokens=100),
+        )
+        result = handler.format(data)
+
+        assert result.body["max_completion_tokens"] == 100
+
+
+class TestChatCompletionsToolResponseColumn:
+    """Verify request handler uses tool_response_column instead of hardcoded default.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.fixture
+    def handler(self):
+        """
+        ## WRITTEN BY AI ##
+        """
+        return ChatCompletionsRequestHandler()
+
+    @pytest.mark.smoke
+    def test_uses_tool_response_from_column(self, handler):
+        """Tool response content from tool_response_column is used in history.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        from guidellm.schemas.tool_call import (
+            ToolCall,
+            ToolCallFunction,
+        )
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        prior_request = GenerationRequest(
+            columns={
+                "text_column": ["call the tool"],
+                "tools_column": [json.dumps(tools)],
+                "tool_response_column": ['{"result": "custom data"}'],
+            },
+            expects_tool_call=True,
+        )
+        prior_response = MagicMock(spec=GenerationResponse)
+        prior_response.tool_calls = [
+            ToolCall(
+                id="call_1",
+                function=ToolCallFunction(name="fn"),
+            )
+        ]
+        prior_response.text = None
+        prior_response.reasoning_text = None
+
+        current_request = GenerationRequest(
+            columns={"text_column": ["now respond"]},
+            expects_tool_call=False,
+        )
+
+        result = handler.format(
+            current_request,
+            history=[(prior_request, prior_response)],
+        )
+
+        tool_messages = [m for m in result.body["messages"] if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+        assert tool_messages[0]["content"] == '{"result": "custom data"}'
+
+    @pytest.mark.sanity
+    def test_falls_back_to_default_without_column(self, handler):
+        """Without tool_response_column, the default placeholder is used.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        from guidellm.schemas.tool_call import (
+            ToolCall,
+            ToolCallFunction,
+        )
+        from guidellm.settings import settings
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        prior_request = GenerationRequest(
+            columns={
+                "text_column": ["call the tool"],
+                "tools_column": [json.dumps(tools)],
+            },
+            expects_tool_call=True,
+        )
+        prior_response = MagicMock(spec=GenerationResponse)
+        prior_response.tool_calls = [
+            ToolCall(
+                id="call_1",
+                function=ToolCallFunction(name="fn"),
+            )
+        ]
+        prior_response.text = None
+        prior_response.reasoning_text = None
+
+        current_request = GenerationRequest(
+            columns={"text_column": ["now respond"]},
+            expects_tool_call=False,
+        )
+
+        result = handler.format(
+            current_request,
+            history=[(prior_request, prior_response)],
+        )
+
+        tool_messages = [m for m in result.body["messages"] if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+        assert tool_messages[0]["content"] == settings.default_synthetic_tool_response
+
+    @pytest.mark.sanity
+    def test_bytes_tool_response_decoded(self, handler):
+        """Tool response content stored as bytes (from orjson) is decoded to str.
+
+        ## WRITTEN BY AI ##
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        from guidellm.schemas.tool_call import (
+            ToolCall,
+            ToolCallFunction,
+        )
+
+        tools = [{"type": "function", "function": {"name": "fn"}}]
+        prior_request = GenerationRequest(
+            columns={
+                "text_column": ["call the tool"],
+                "tools_column": [json.dumps(tools)],
+                "tool_response_column": [b'{"result": "bytes data"}'],
+            },
+            expects_tool_call=True,
+        )
+        prior_response = MagicMock(spec=GenerationResponse)
+        prior_response.tool_calls = [
+            ToolCall(
+                id="call_1",
+                function=ToolCallFunction(name="fn"),
+            )
+        ]
+        prior_response.text = None
+        prior_response.reasoning_text = None
+
+        current_request = GenerationRequest(
+            columns={"text_column": ["now respond"]},
+            expects_tool_call=False,
+        )
+
+        result = handler.format(
+            current_request,
+            history=[(prior_request, prior_response)],
+        )
+
+        tool_messages = [m for m in result.body["messages"] if m.get("role") == "tool"]
+        assert len(tool_messages) == 1
+        assert tool_messages[0]["content"] == '{"result": "bytes data"}'
+        assert isinstance(tool_messages[0]["content"], str)

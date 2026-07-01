@@ -22,7 +22,6 @@ from .profiles import (
     AsyncProfile,
     ConcurrentProfile,
     Profile,
-    ProfileType,
     SweepProfile,
     SynchronousProfile,
     ThroughputProfile,
@@ -33,8 +32,9 @@ from .schemas import (
     Benchmark,
     BenchmarkAccumulator,
     BenchmarkAccumulatorT,
+    BenchmarkArgs,
     BenchmarkConfig,
-    BenchmarkGenerativeTextArgs,
+    BenchmarkScenario,
     BenchmarkT,
     GenerativeAudioMetricsSummary,
     GenerativeBenchmark,
@@ -54,13 +54,19 @@ from .schemas import (
     SchedulerMetricsAccumulator,
 )
 
+# Rebuild schemas one more time before
+# export to catch any nested field changes
+BenchmarkArgs.reload_schema()
+BenchmarkScenario.reload_schema()
+
 __all__ = [
     "AsyncProfile",
     "Benchmark",
     "BenchmarkAccumulator",
     "BenchmarkAccumulatorT",
+    "BenchmarkArgs",
     "BenchmarkConfig",
-    "BenchmarkGenerativeTextArgs",
+    "BenchmarkScenario",
     "BenchmarkT",
     "Benchmarker",
     "BenchmarkerProgress",
@@ -84,7 +90,6 @@ __all__ = [
     "GenerativeTextMetricsSummary",
     "GenerativeVideoMetricsSummary",
     "Profile",
-    "ProfileType",
     "RunningMetricStats",
     "SchedulerMetrics",
     "SchedulerMetricsAccumulator",

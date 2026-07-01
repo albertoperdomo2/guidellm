@@ -7,24 +7,37 @@ from .file import (
     ArrowFileDatasetDeserializer,
     CSVFileDatasetDeserializer,
     DBFileDatasetDeserializer,
+    FileDataArgs,
     HDF5FileDatasetDeserializer,
     JSONFileDatasetDeserializer,
     ParquetFileDatasetDeserializer,
     TarFileDatasetDeserializer,
     TextFileDatasetDeserializer,
 )
-from .huggingface import HuggingFaceDatasetDeserializer
+from .huggingface import HuggingFaceDataArgs, HuggingFaceDatasetDeserializer
 from .memory import (
-    InMemoryCsvDatasetDeserializer,
+    InMemoryDictDataArgs,
     InMemoryDictDatasetDeserializer,
+    InMemoryDictListDataArgs,
     InMemoryDictListDatasetDeserializer,
+    InMemoryItemListDataArgs,
     InMemoryItemListDatasetDeserializer,
-    InMemoryJsonStrDatasetDeserializer,
 )
 from .synthetic import (
+    SyntheticTextDataArgs,
     SyntheticTextDataset,
     SyntheticTextDatasetDeserializer,
 )
+from .trace_common import (
+    TraceDataArgs,
+    TraceDatasetDeserializer,
+    TraceFormatBase,
+    TraceFormatRegistry,
+    decode_prompt,
+    generate_token_ids,
+)
+from .trace_minimal import MinimalTraceFormatArgs
+from .trace_mooncake import MooncakeTraceFormatArgs
 
 __all__ = [
     "ArrowFileDatasetDeserializer",
@@ -33,17 +46,29 @@ __all__ = [
     "DataNotSupportedError",
     "DatasetDeserializer",
     "DatasetDeserializerFactory",
+    "FileDataArgs",
     "HDF5FileDatasetDeserializer",
+    "HuggingFaceDataArgs",
     "HuggingFaceDatasetDeserializer",
-    "InMemoryCsvDatasetDeserializer",
+    "InMemoryDictDataArgs",
     "InMemoryDictDatasetDeserializer",
+    "InMemoryDictListDataArgs",
     "InMemoryDictListDatasetDeserializer",
+    "InMemoryItemListDataArgs",
     "InMemoryItemListDatasetDeserializer",
-    "InMemoryJsonStrDatasetDeserializer",
     "JSONFileDatasetDeserializer",
+    "MinimalTraceFormatArgs",
+    "MooncakeTraceFormatArgs",
     "ParquetFileDatasetDeserializer",
+    "SyntheticTextDataArgs",
     "SyntheticTextDataset",
     "SyntheticTextDatasetDeserializer",
     "TarFileDatasetDeserializer",
     "TextFileDatasetDeserializer",
+    "TraceDataArgs",
+    "TraceDatasetDeserializer",
+    "TraceFormatBase",
+    "TraceFormatRegistry",
+    "decode_prompt",
+    "generate_token_ids",
 ]

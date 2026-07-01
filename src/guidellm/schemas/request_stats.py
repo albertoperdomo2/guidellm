@@ -18,6 +18,7 @@ from pydantic import Field, computed_field
 from guidellm.schemas.base import StandardBaseDict
 from guidellm.schemas.info import RequestInfo
 from guidellm.schemas.request import UsageMetrics
+from guidellm.schemas.tool_call import ToolCall
 
 __all__ = ["GenerativeRequestStats"]
 
@@ -52,6 +53,14 @@ class GenerativeRequestStats(StandardBaseDict):
     )
     output: str | None = Field(
         default=None, description="Generated text output from the request"
+    )
+    reasoning_output: str | None = Field(
+        default=None,
+        description="Reasoning/chain-of-thought text emitted before content",
+    )
+    tool_calls: list[ToolCall] | None = Field(
+        default=None,
+        description="Raw tool call payloads from the model response in OpenAI format",
     )
     info: RequestInfo = Field(description="Request metadata and timing information")
     input_metrics: UsageMetrics = Field(
@@ -216,6 +225,23 @@ class GenerativeRequestStats(StandardBaseDict):
             return None
 
         return self.output_tokens / latency
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def time_to_first_output_token_ms(self) -> float | None:
+        """
+        Time to first content (non-reasoning) token in milliseconds.
+
+        When no reasoning tokens are emitted this equals TTFT.
+
+        :return: Milliseconds from request start to first content token,
+            or None if unavailable
+        """
+        first_output = self.info.timings.first_output_token_iteration
+        start = self.info.timings.request_start
+        if first_output is None or start is None:
+            return None
+        return 1000 * (first_output - start)
 
     @computed_field  # type: ignore[misc]
     @property

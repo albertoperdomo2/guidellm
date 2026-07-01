@@ -12,7 +12,8 @@ from guidellm.data.finalizers import (
     FinalizerRegistry,
     GenerativeRequestFinalizer,
 )
-from guidellm.schemas import GenerationRequest
+from guidellm.data.finalizers.generative import GenerativeRequestFinalizerArgs
+from guidellm.schemas import GenerationRequest, RequestSettings
 
 
 class TestGenerativeRequestFinalizerTokenAggregation:
@@ -27,7 +28,7 @@ class TestGenerativeRequestFinalizerTokenAggregation:
 
         ### WRITTEN BY AI ###
         """
-        return GenerativeRequestFinalizer()
+        return GenerativeRequestFinalizer(GenerativeRequestFinalizerArgs())
 
     @pytest.mark.smoke
     def test_finalize_single_turn_prompt_tokens(self, valid_instances):
@@ -116,7 +117,7 @@ class TestGenerativeRequestFinalizerMultimodal:
 
         ### WRITTEN BY AI ###
         """
-        return GenerativeRequestFinalizer()
+        return GenerativeRequestFinalizer(GenerativeRequestFinalizerArgs())
 
     @pytest.mark.sanity
     def test_finalize_multi_value_text_columns(self, valid_instances):
@@ -196,7 +197,7 @@ class TestFinalizerTopLevel:
 
         ### WRITTEN BY AI ###
         """
-        return GenerativeRequestFinalizer()
+        return GenerativeRequestFinalizer(GenerativeRequestFinalizerArgs())
 
     @pytest.mark.smoke
     def test_finalizer_returns_list(self, valid_instances):
@@ -294,7 +295,7 @@ class TestFinalizerRegistry:
 
         ### WRITTEN BY AI ###
         """
-        instance = GenerativeRequestFinalizer()
+        instance = GenerativeRequestFinalizer(GenerativeRequestFinalizerArgs())
 
         # Should have __call__ method
         assert callable(instance)
@@ -302,3 +303,107 @@ class TestFinalizerRegistry:
         # Test it works as expected
         result = instance([{"text_column": ["test"]}])
         assert isinstance(result, list)
+
+
+class TestFinalizerExpectsToolCall:
+    """Verify GenerativeRequestFinalizer sets expects_tool_call correctly.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.fixture
+    def finalizer(self):
+        """
+        ## WRITTEN BY AI ##
+        """
+        return GenerativeRequestFinalizer(GenerativeRequestFinalizerArgs())
+
+    @pytest.mark.smoke
+    def test_expects_tool_call_matches_tools_column_presence(self, finalizer):
+        """expects_tool_call is True only on turns that have tools_column.
+
+        ## WRITTEN BY AI ##
+        """
+        items = [
+            {"text_column": ["hello"], "tools_column": ['[{"type": "function"}]']},
+            {"text_column": ["world"]},
+        ]
+        results = finalizer(items)
+
+        assert results[0].expects_tool_call is True
+        assert results[1].expects_tool_call is False
+
+    @pytest.mark.smoke
+    def test_all_turns_with_tools_all_expect_tool_call(self, finalizer):
+        """When every turn has tools_column, every turn expects a tool call.
+
+        ## WRITTEN BY AI ##
+        """
+        items = [
+            {"text_column": ["hello"], "tools_column": ['[{"type": "function"}]']},
+            {"text_column": ["world"], "tools_column": ['[{"type": "function"}]']},
+        ]
+        results = finalizer(items)
+
+        assert results[0].expects_tool_call is True
+        assert results[1].expects_tool_call is True
+
+    @pytest.mark.sanity
+    def test_expects_tool_call_false_without_tools(self, finalizer):
+        """Turns without tools_column have expects_tool_call=False.
+
+        ## WRITTEN BY AI ##
+        """
+        items = [
+            {"text_column": ["hello"]},
+            {"text_column": ["world"]},
+        ]
+        results = finalizer(items)
+
+        assert results[0].expects_tool_call is False
+        assert results[1].expects_tool_call is False
+
+    @pytest.mark.sanity
+    def test_single_turn_with_tools_expects_tool_call(self, finalizer):
+        """A single-turn conversation with tools has expects_tool_call=True.
+
+        ## WRITTEN BY AI ##
+        """
+        items = [
+            {"text_column": ["hello"], "tools_column": ['[{"type": "function"}]']},
+        ]
+        results = finalizer(items)
+        assert results[0].expects_tool_call is True
+
+
+class TestGenerativeRequestFinalizerRequestSettings:
+    """Verify relative_timestamp_column maps to GenerationRequest.settings.
+
+    ### WRITTEN BY AI ###
+    """
+
+    @pytest.fixture
+    def finalizer(self):
+        """### WRITTEN BY AI ###"""
+        return GenerativeRequestFinalizer(GenerativeRequestFinalizerArgs())
+
+    @pytest.mark.smoke
+    def test_relative_timestamp_column_sets_settings(self, finalizer):
+        """### WRITTEN BY AI ###"""
+        result = finalizer.finalize_turn({"relative_timestamp_column": [2.5]})
+
+        assert result.settings == RequestSettings(relative_timestamp=2.5)
+
+    @pytest.mark.smoke
+    def test_missing_relative_timestamp_column_uses_empty_settings(self, finalizer):
+        """### WRITTEN BY AI ###"""
+        result = finalizer.finalize_turn({"text_column": ["hello"]})
+
+        assert result.settings == RequestSettings()
+
+    @pytest.mark.smoke
+    def test_none_relative_timestamp_column_uses_empty_settings(self, finalizer):
+        """### WRITTEN BY AI ###"""
+        result = finalizer.finalize_turn({"relative_timestamp_column": [None]})
+
+        assert result.settings == RequestSettings()

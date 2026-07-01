@@ -21,8 +21,9 @@ from .base import (
     StatusBreakdown,
     SuccessfulT,
     TotalT,
+    standard_model_config,
 )
-from .info import RequestInfo, RequestTimings
+from .info import RequestInfo, RequestSettings, RequestTimings
 from .request import (
     GenerationRequest,
     GenerationRequestArguments,
@@ -36,6 +37,7 @@ from .statistics import (
     Percentiles,
     StatusDistributionSummary,
 )
+from .tool_call import ToolCall, ToolCallFunction
 
 __all__ = [
     "BaseModelT",
@@ -52,12 +54,16 @@ __all__ = [
     "RegisterClassT",
     "ReloadableBaseModel",
     "RequestInfo",
+    "RequestSettings",
     "RequestTimings",
     "StandardBaseDict",
     "StandardBaseModel",
     "StatusBreakdown",
     "StatusDistributionSummary",
     "SuccessfulT",
+    "ToolCall",
+    "ToolCallFunction",
     "TotalT",
     "UsageMetrics",
+    "standard_model_config",
 ]

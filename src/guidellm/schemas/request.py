@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import Field, computed_field
 
 from guidellm.schemas.base import StandardBaseDict, StandardBaseModel
+from guidellm.schemas.info import RequestSettings
 from guidellm.utils.dict import deep_update
 
 __all__ = [
@@ -52,6 +53,12 @@ class GenerationRequestArguments(StandardBaseDict):
     body: dict[str, Any] | None = Field(
         default=None,
         description="Content to include in the main request body.",
+        examples=[
+            {
+                "temperature": 0.5,
+                "max_tokens": 100,
+            }
+        ],
     )
     files: dict[str, Any] | None = Field(
         default=None,
@@ -238,6 +245,12 @@ class GenerationRequest(StandardBaseModel):
             "where keys are column names and values are lists of column entries."
         ),
     )
+    expects_tool_call: bool = Field(
+        default=False,
+        description="Whether this turn is expected to produce a tool call response. "
+        "Set by the data pipeline for pre-planned tool-call turns. "
+        "Derived from the presence of tools_column in the turn data.",
+    )
     input_metrics: UsageMetrics = Field(
         default_factory=UsageMetrics,
         description="Input statistics including counts, sizes, and durations.",
@@ -245,4 +258,11 @@ class GenerationRequest(StandardBaseModel):
     output_metrics: UsageMetrics = Field(
         default_factory=UsageMetrics,
         description="Output statistics including counts, sizes, and durations.",
+    )
+    settings: RequestSettings = Field(
+        default_factory=RequestSettings,
+        description=(
+            "Per-request scheduling metadata from the dataset finalizer, "
+            "for example trace replay relative timestamps."
+        ),
     )

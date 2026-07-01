@@ -18,6 +18,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }
+torchcodec = { index = "pytorch-cpu" }
 
 # ************************************************
 # ********** Project Metadata **********
@@ -71,6 +72,8 @@ dependencies = [
     "uvloop>=0.18",
     "torch",
     "more-itertools>=10.8.0",
+    "typing-extensions>=4.15.0",
+    "websockets>=13.0",
 ]
 
 [project.optional-dependencies]
@@ -81,11 +84,11 @@ recommended = ["guidellm[perf,tokenizers]"]
 perf = ["orjson", "msgpack", "msgspec", "uvloop"]
 tokenizers = ["tiktoken", "blobfile", "mistral-common"]
 audio = [
-    # Lowest version with full torchcodec support
+    # Version with stable aarch64 CPU-only wheels
     "datasets[audio]>=4.1.0",
-    # Torchcodec needs specific torch version
-    "torch==2.10.*",
-    "torchcodec==0.10.*",
+    # Torchcodec 0.13 requires PyTorch >= 2.11
+    "torch==2.11.*",
+    "torchcodec==0.13.*",
 ]
 vision = [
     "datasets[vision]",
@@ -196,6 +199,7 @@ exclude = ["build", "dist", "env", ".venv*"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+line-ending = "lf"
 
 [tool.ruff.lint]
 ignore = [
@@ -278,6 +282,10 @@ select = [
     "S106",    # allow hardcoded passwords in tests
     "PLR0915", # allow complext statements in tests
 ]
+"scripts/**/*.py" = [
+    "T201",    # print statements are the primary output mechanism for scripts
+    "INP001",  # scripts/ is not a package
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["guidellm", "tests"]
@@ -289,4 +297,5 @@ markers = [
     "smoke: quick tests to check basic functionality",
     "sanity: detailed tests to ensure major functions work correctly",
     "regression: tests to ensure that new changes do not break existing functionality",
+    "slow: marks tests that are slow to run, e.g. those that download or load real models/tokenizers",
 ]

@@ -18,11 +18,33 @@ from typing import Annotated, Any, ClassVar, Literal
 from pydantic import Field
 
 from guidellm.benchmark.outputs.output import GenerativeBenchmarkerOutput
-from guidellm.benchmark.schemas import GenerativeBenchmark, GenerativeBenchmarksReport
+from guidellm.benchmark.schemas import (
+    BenchmarkOutputArgs,
+    GenerativeBenchmark,
+    GenerativeBenchmarksReport,
+)
 from guidellm.schemas import DistributionSummary, StatusDistributionSummary
 from guidellm.utils.functions import safe_format_timestamp
 
-__all__ = ["GenerativeBenchmarkerCSV"]
+__all__ = [
+    "CSVBenchmarkOutputArgs",
+    "GenerativeBenchmarkerCSV",
+]
+
+
+@BenchmarkOutputArgs.register("csv")
+class CSVBenchmarkOutputArgs(BenchmarkOutputArgs):
+    """Model for CSV benchmark output arguments."""
+
+    kind: Literal["csv"] = Field(
+        default="csv",
+        description="The kind of output.",
+    )
+    path: Path = Field(
+        default=Path("./benchmarks.csv"),
+        description="The file to save the output to.",
+    )
+
 
 TIMESTAMP_FORMAT: Annotated[str, "Format string for timestamp output in CSV files"] = (
     "%Y-%m-%d %H:%M:%S"
@@ -79,22 +101,17 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
     DEFAULT_FILE: ClassVar[str] = "benchmarks.csv"
 
     @classmethod
-    def validated_kwargs(
-        cls, output_path: str | Path | None, **_kwargs
-    ) -> dict[str, Any]:
+    def from_args(cls, args: BenchmarkOutputArgs) -> GenerativeBenchmarkerCSV:
         """
-        Validate and normalize constructor keyword arguments.
+        Create a CSV output formatter from output arguments.
 
-        :param output_path: Path for CSV output file or directory
-        :param _kwargs: Additional keyword arguments (ignored)
-        :return: Normalized keyword arguments dictionary
+        :param args: Output configuration with path
+        :return: Configured CSV output formatter
         """
-        new_kwargs = {}
-        if output_path is not None:
-            new_kwargs["output_path"] = (
-                Path(output_path) if not isinstance(output_path, Path) else output_path
-            )
-        return new_kwargs
+        if not isinstance(args, CSVBenchmarkOutputArgs):
+            raise ValueError(f"Expected CSVBenchmarkOutputArgs, got {type(args)}")
+
+        return cls(output_path=args.path)
 
     output_path: Path = Field(
         default_factory=lambda: Path.cwd(),
@@ -118,8 +135,8 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
         with output_path.open("w", newline="") as file:
             writer = csv.writer(file)
 
-            row_maps: list[dict[tuple[str, ...], str | int | float]] = []
-            ordered_headers: dict[tuple[str, ...], None] = {}
+            all_headers: list[list[list[str]]] = []
+            all_values: list[list[str | int | float]] = []
 
             for benchmark in report.benchmarks:
                 benchmark_headers: list[list[str]] = []
@@ -145,33 +162,54 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
                 self._add_scheduler_info(benchmark, benchmark_headers, benchmark_values)
                 self._add_runtime_info(report, benchmark_headers, benchmark_values)
 
-                row_map: dict[tuple[str, ...], str | int | float] = {}
-                for header_parts, value in zip(
-                    benchmark_headers, benchmark_values, strict=False
-                ):
-                    header_key = tuple(header_parts)
-                    row_map[header_key] = value
+                all_headers.append(benchmark_headers)
+                all_values.append(benchmark_values)
 
-                    if header_key not in ordered_headers:
-                        ordered_headers[header_key] = None
-
-                row_maps.append(row_map)
-
-            header_keys = list(ordered_headers.keys())
-            headers = [list(header_key) for header_key in header_keys]
-
-            data_rows: list[list[str | int | float]] = []
-            for row_map in row_maps:
-                aligned_row_values = [
-                    row_map.get(header_key, "") for header_key in header_keys
-                ]
-                data_rows.append(aligned_row_values)
+            headers, data_rows = self._align_columns(all_headers, all_values)
 
             self._write_multirow_header(writer, headers)
             for row in data_rows:
                 writer.writerow(row)
 
         return output_path
+
+    @staticmethod
+    def _align_columns(
+        all_headers: list[list[list[str]]],
+        all_values: list[list[str | int | float]],
+    ) -> tuple[list[list[str]], list[list[str | int | float]]]:
+        """
+        Align columns across multiple benchmarks that may have different column sets.
+
+        Builds a unified header list from all benchmarks (preserving first-seen order)
+        and pads each row with empty strings for columns it doesn't have.
+
+        :param all_headers: Per-benchmark list of column header hierarchies
+        :param all_values: Per-benchmark list of column values
+        :return: Tuple of (unified headers, aligned data rows)
+        """
+        ordered_headers: dict[tuple[str, ...], None] = {}
+        row_maps: list[dict[tuple[str, ...], str | int | float]] = []
+
+        for benchmark_headers, benchmark_values in zip(
+            all_headers, all_values, strict=True
+        ):
+            row_map: dict[tuple[str, ...], str | int | float] = {}
+            for header_parts, value in zip(
+                benchmark_headers, benchmark_values, strict=False
+            ):
+                header_key = tuple(header_parts)
+                row_map[header_key] = value
+                if header_key not in ordered_headers:
+                    ordered_headers[header_key] = None
+            row_maps.append(row_map)
+
+        header_keys = list(ordered_headers.keys())
+        headers = [list(k) for k in header_keys]
+        data_rows: list[list[str | int | float]] = [
+            [row_map.get(k, "") for k in header_keys] for row_map in row_maps
+        ]
+        return headers, data_rows
 
     def _write_multirow_header(self, writer: Any, headers: list[list[str]]) -> None:
         """
@@ -232,7 +270,7 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
             values,
             "Runtime Info",
             "Arguments",
-            report.args.model_dump_json(),
+            report.config.model_dump_json(),
         )
 
     def _add_run_info(
@@ -257,7 +295,7 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
             values,
             "Run Info",
             "Profile",
-            benchmark.config.profile.model_dump_json(),
+            json.dumps(benchmark.config.profile),
         )
         self._add_field(
             headers,
@@ -393,6 +431,13 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
             values,
             benchmark.metrics.time_to_first_token_ms,
             "Time to First Token",
+            "ms",
+        )
+        self._add_stats_for_metric(
+            headers,
+            values,
+            benchmark.metrics.time_to_first_output_token_ms,
+            "Time to First Output Token",
             "ms",
         )
         self._add_stats_for_metric(
@@ -537,12 +582,16 @@ class GenerativeBenchmarkerCSV(GenerativeBenchmarkerOutput):
         """
         Check if distribution summary contains any data.
 
+        Uses ``count > 0`` rather than ``total_sum > 0`` so that
+        all-zero distributions (e.g. errored tool-call requests) are
+        still recognised as having data.
+
         :param dist_summary: Distribution summary to check
         :return: True if summary contains data, False otherwise
         """
         return any(
             getattr(dist_summary, status, None) is not None
-            and getattr(dist_summary, status).total_sum > 0.0
+            and getattr(dist_summary, status).count > 0
             for status in ["successful", "incomplete", "errored"]
         )
 

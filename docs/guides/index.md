@@ -68,6 +68,14 @@ Whether you're interested in understanding the system architecture, exploring su
 
   [:octicons-arrow-right-24: Over-Saturation Guide](over_saturation_stopping.md)
 
+- :material-wrench:{ .lg .middle } Tool Calling
+
+  ______________________________________________________________________
+
+  Benchmark multi-turn tool calling workloads with pre-anticipated tool call turns, synthetic data, and dataset-driven tool definitions.
+
+  [:octicons-arrow-right-24: Tool Calling Guide](tool_calling.md)
+
 - :material-image-multiple:{ .lg .middle } Multimodal Benchmarking
 
   ______________________________________________________________________
@@ -75,5 +83,21 @@ Whether you're interested in understanding the system architecture, exploring su
   Set up benchmarks for multimodal models including text+image, video, and audio tasks.
 
   [:octicons-arrow-right-24: Multimodal Guide](multimodal/index.md)
+
+- :material-lifebuoy:{ .lg .middle } Troubleshooting
+
+  ______________________________________________________________________
+
+  How to troubleshoot common errors.
+
+  [:octicons-arrow-right-24: Troubleshooting Guide](troubleshooting.md)
+
+- :material-update:{ .lg .middle } v0.7.0 Migration Guide
+
+  ______________________________________________________________________
+
+  How to migrate GuideLLM CLI commandsfrom v0.6.0 to v0.7.0.
+
+  [:octicons-arrow-right-24: v0.7.0 Migration Guide](v0.7.0_migration_guide.md)
 
 </div>
