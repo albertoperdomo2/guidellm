@@ -222,7 +222,9 @@ def process_dataset(
     Main method to process and save a dataset with sampled prompt/output token counts.
     """
     _validate_output_suffix(output_path)
-    logger.info(f"Starting dataset conversion | Input: {data} | Output: {output_path}")
+    logger.info(
+        "Starting dataset conversion | Input: {} | Output: {}", data, output_path
+    )
 
     # Parse config
     config_obj = parse_synthetic_config(config)
@@ -429,8 +431,8 @@ def _process_single_row(
     :return: Processed row dictionary or None if row should be skipped.
     """
     # Extract prompt and prefix
-    prompt_text = row.get(prompt_column, "")
-    prefix_text = row.get(prefix_column) if prefix_column else None
+    prompt_text: str = row.get(prompt_column, "")
+    prefix_text: str | None = row.get(prefix_column) if prefix_column else None
 
     # Sample target prompt token count
     target_prompt_len = next(prompt_token_sampler)
@@ -442,7 +444,7 @@ def _process_single_row(
         if prefix_tokens_max is not None:
             prefix_tokens_list = tokenizer.encode(prefix_text)
             if len(prefix_tokens_list) > prefix_tokens_max:
-                prefix_text = tokenizer.decode(prefix_tokens_list[:prefix_tokens_max])
+                prefix_text = tokenizer.decode(prefix_tokens_list[:prefix_tokens_max])  # type: ignore[assignment]
 
         # Count prefix tokens toward prompt if enabled
         if include_prefix_in_token_count:
@@ -478,7 +480,7 @@ def _process_single_row(
     # Trim long prompts
     tokens = tokenizer.encode(prompt_text)
     if len(tokens) > target_prompt_len:
-        prompt_text = tokenizer.decode(tokens[:target_prompt_len])
+        prompt_text = tokenizer.decode(tokens[:target_prompt_len])  # type: ignore[assignment]
         tokens = tokenizer.encode(prompt_text)
 
     # Sample output token count
@@ -515,15 +517,15 @@ def _finalize_processed_dataset(
         logger.error("No prompts remained after processing")
         return
 
-    logger.info(f"Generated processed dataset with {len(processed_prompts)} prompts")
+    logger.info("Generated processed dataset with {} prompts", len(processed_prompts))
 
     processed_dataset = Dataset.from_list(processed_prompts)
     save_dataset_to_file(processed_dataset, output_path)
-    logger.info(f"Conversion completed. Dataset saved to: {output_path}")
+    logger.info("Conversion completed. Dataset saved to: {}", output_path)
 
     if push_to_hub:
         push_dataset_to_hub(hub_dataset_id, processed_dataset)
-        logger.info(f"Pushed dataset to: {hub_dataset_id}")
+        logger.info("Pushed dataset to: {}", hub_dataset_id)
 
 
 def push_dataset_to_hub(

@@ -4,8 +4,9 @@ Unit tests for OpenAIHTTPBackend implementation.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -24,6 +25,10 @@ from guidellm.schemas import (
     GenerationResponse,
     RequestInfo,
     RequestTimings,
+)
+from guidellm.schemas.tool_call import (
+    ToolCall,
+    ToolCallFunction,
 )
 from tests.unit.testing_utils import async_timeout
 
@@ -868,26 +873,19 @@ class TestCheckToolCallExpectations:
         )
         return OpenAIHTTPBackend(args)
 
-    def _make_request(self, expects_tool_call: bool) -> GenerationRequest:
+    def _make_request(self, is_tool_call: bool) -> GenerationRequest:
         """
         ## WRITTEN BY AI ##
         """
         return GenerationRequest(
             columns={"text_column": ["test"]},
-            expects_tool_call=expects_tool_call,
+            turn_type="client_tool_call" if is_tool_call else "standard",
         )
 
     def _make_response(self, has_tool_calls: bool):
         """
         ## WRITTEN BY AI ##
         """
-        from unittest.mock import MagicMock
-
-        from guidellm.schemas.tool_call import (
-            ToolCall,
-            ToolCallFunction,
-        )
-
         resp = MagicMock()
         resp.tool_calls = (
             [
@@ -908,7 +906,7 @@ class TestCheckToolCallExpectations:
         ## WRITTEN BY AI ##
         """
         backend = self._make_backend("error_stop")
-        req = self._make_request(expects_tool_call=True)
+        req = self._make_request(is_tool_call=True)
         resp = self._make_response(has_tool_calls=True)
 
         backend._check_tool_call_expectations(req, resp)
@@ -920,7 +918,7 @@ class TestCheckToolCallExpectations:
         ## WRITTEN BY AI ##
         """
         backend = self._make_backend("error_stop")
-        req = self._make_request(expects_tool_call=False)
+        req = self._make_request(is_tool_call=False)
         resp = self._make_response(has_tool_calls=False)
 
         backend._check_tool_call_expectations(req, resp)
@@ -932,7 +930,7 @@ class TestCheckToolCallExpectations:
         ## WRITTEN BY AI ##
         """
         backend = self._make_backend("ignore_continue")
-        req = self._make_request(expects_tool_call=True)
+        req = self._make_request(is_tool_call=True)
         resp = self._make_response(has_tool_calls=False)
 
         backend._check_tool_call_expectations(req, resp)
@@ -943,10 +941,8 @@ class TestCheckToolCallExpectations:
 
         ## WRITTEN BY AI ##
         """
-        import asyncio
-
         backend = self._make_backend("ignore_stop")
-        req = self._make_request(expects_tool_call=True)
+        req = self._make_request(is_tool_call=True)
         resp = self._make_response(has_tool_calls=False)
 
         with pytest.raises(asyncio.CancelledError, match="tool call"):
@@ -959,7 +955,7 @@ class TestCheckToolCallExpectations:
         ## WRITTEN BY AI ##
         """
         backend = self._make_backend("error_stop")
-        req = self._make_request(expects_tool_call=True)
+        req = self._make_request(is_tool_call=True)
         resp = self._make_response(has_tool_calls=False)
 
         with pytest.raises(ValueError, match="tool call"):

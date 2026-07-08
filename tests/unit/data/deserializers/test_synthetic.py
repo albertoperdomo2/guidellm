@@ -11,6 +11,7 @@ import pytest
 import yaml
 from datasets import IterableDataset
 from faker import Faker
+from pydantic import ValidationError
 
 from guidellm.data import config as config_module
 from guidellm.data.deserializers.synthetic import (
@@ -22,6 +23,7 @@ from guidellm.data.deserializers.synthetic import (
     _SyntheticTextExamplesIterable,
 )
 from guidellm.data.schemas import DataNotSupportedError
+from guidellm.settings import settings
 
 
 class TestPrefixBucketConfig:
@@ -136,6 +138,10 @@ class TestSyntheticDatasetConfig:
             output_tokens_stdev=5,
             output_tokens_min=20,
             output_tokens_max=40,
+            delay=1.2,
+            delay_stdev=0.5,
+            delay_min=0.1,
+            delay_max=2.4,
         )
 
         assert config.prefix_buckets[0].prefix_tokens == 5  # type: ignore [index]
@@ -147,6 +153,10 @@ class TestSyntheticDatasetConfig:
         assert config.output_tokens_stdev == 5
         assert config.output_tokens_min == 20
         assert config.output_tokens_max == 40
+        assert config.delay == 1.2
+        assert config.delay_stdev == 0.5
+        assert config.delay_min == 0.1
+        assert config.delay_max == 2.4
 
     @pytest.mark.regression
     def test_parse_json_string(self):
@@ -158,6 +168,7 @@ class TestSyntheticDatasetConfig:
             {
                 "prompt_tokens": 75,
                 "output_tokens": 25,
+                "delay": 1.2,
                 "prefix_buckets": [
                     {"bucket_weight": 100, "prefix_count": 1, "prefix_tokens": 10}
                 ],
@@ -168,6 +179,7 @@ class TestSyntheticDatasetConfig:
 
         assert config.prompt_tokens == 75
         assert config.output_tokens == 25
+        assert config.delay == 1.2
         assert config.prefix_buckets[0].prefix_tokens == 10  # type: ignore [index]
 
     @pytest.mark.sanity
@@ -182,9 +194,19 @@ class TestSyntheticDatasetConfig:
         with pytest.raises(ValueError):
             SyntheticTextDataArgs(prompt_tokens=20, output_tokens=0)
 
+        with pytest.raises(ValueError):
+            SyntheticTextDataArgs(prompt_tokens=20, output_tokens=20, delay=0.0)
+
         # Test negative prefix tokens via PrefixBucketConfig validation
         with pytest.raises(ValueError):
             SyntheticTextPrefixBucketConfig(prefix_tokens=-1)
+
+    @pytest.mark.sanity
+    def test_validation_positive_or_zero(self):
+        """`delay_min` will take 0.0 as a valid value."""
+        SyntheticTextDataArgs(prompt_tokens=20, delay=1.2, delay_min=0.0)
+        with pytest.raises(ValueError):
+            SyntheticTextDataArgs(prompt_tokens=20, delay=1.2, delay_min=-0.1)
 
     @pytest.mark.regression
     def test_validation_optional_positive_values(self):
@@ -222,10 +244,8 @@ class TestSyntheticTextGenerator:
         """
         tokenizer = Mock()
         tokenizer.encode.side_effect = lambda text: list(range(len(text.split())))
-        tokenizer.decode.side_effect = (
-            lambda tokens, skip_special_tokens=False: " ".join(
-                f"token_{t}" for t in tokens[:5]
-            )
+        tokenizer.decode.side_effect = lambda tokens, skip_special_tokens=False: (
+            " ".join(f"token_{t}" for t in tokens[:5])
         )
         return tokenizer
 
@@ -378,10 +398,8 @@ class TestSyntheticDatasetDeserializer:
         """
         tokenizer = Mock()
         tokenizer.encode.side_effect = lambda text: list(range(len(text.split())))
-        tokenizer.decode.side_effect = (
-            lambda tokens, skip_special_tokens=False: " ".join(
-                f"token_{t}" for t in tokens[:5]
-            )
+        tokenizer.decode.side_effect = lambda tokens, skip_special_tokens=False: (
+            " ".join(f"token_{t}" for t in tokens[:5])
         )
         return tokenizer
 
@@ -540,10 +558,8 @@ class TestSyntheticTextDatasetMultiturn:
         """
         tokenizer = Mock()
         tokenizer.encode.side_effect = lambda text: list(range(len(text.split())))
-        tokenizer.decode.side_effect = (
-            lambda tokens, skip_special_tokens=False: " ".join(
-                f"token_{t}" for t in tokens[:5]
-            )
+        tokenizer.decode.side_effect = lambda tokens, skip_special_tokens=False: (
+            " ".join(f"token_{t}" for t in tokens[:5])
         )
         return tokenizer
 
@@ -605,6 +621,7 @@ class TestSyntheticTextDatasetMultiturn:
         config = SyntheticTextDataArgs(
             prompt_tokens=50,
             output_tokens=25,
+            delay=3.0,
             turns=1,
         )
         dataset = SyntheticTextDataset(config, mock_tokenizer, random_seed=42)
@@ -617,6 +634,7 @@ class TestSyntheticTextDatasetMultiturn:
         assert "prompt_0" in item
         assert "prompt_tokens_count_0" in item
         assert "output_tokens_count_0" in item
+        assert "requeue_delay_0" in item
 
         # Should not have prompt_1, etc
         assert "prompt_1" not in item
@@ -631,6 +649,7 @@ class TestSyntheticTextDatasetMultiturn:
         config = SyntheticTextDataArgs(
             prompt_tokens=50,
             output_tokens=25,
+            delay=3.0,
             turns=3,
         )
         dataset = SyntheticTextDataset(config, mock_tokenizer, random_seed=42)
@@ -643,6 +662,7 @@ class TestSyntheticTextDatasetMultiturn:
             assert f"prompt_{turn}" in item
             assert f"prompt_tokens_count_{turn}" in item
             assert f"output_tokens_count_{turn}" in item
+            assert f"requeue_delay_{turn}" in item
 
         # Should not have prompt_3
         assert "prompt_3" not in item
@@ -835,7 +855,6 @@ class TestSyntheticTextDatasetConfigToolCallFields:
 
         ## WRITTEN BY AI ##
         """
-        from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="out of range"):
             SyntheticTextDataArgs(
@@ -848,7 +867,6 @@ class TestSyntheticTextDatasetConfigToolCallFields:
 
         ## WRITTEN BY AI ##
         """
-        from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="duplicates"):
             SyntheticTextDataArgs(
@@ -861,7 +879,6 @@ class TestSyntheticTextDatasetConfigToolCallFields:
 
         ## WRITTEN BY AI ##
         """
-        from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="out of range"):
             SyntheticTextDataArgs(
@@ -993,6 +1010,392 @@ class TestSyntheticDataToolColumns:
         assert "tools_3" in features
 
 
+class TestSyntheticTextDatasetConfigServerToolCallFields:
+    """Validate server_tool_call_turns field on SyntheticTextDataArgs.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.mark.smoke
+    def test_defaults_no_server_tool_calling(self):
+        """Default config has no server tool calling enabled.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(prompt_tokens=50, output_tokens=50)
+        assert config.server_tool_call_turns == []
+
+    @pytest.mark.smoke
+    def test_server_tool_call_turns_int_coercion(self):
+        """server_tool_call_turns int is normalized to a list of indices.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=3, server_tool_call_turns=2
+        )
+        assert config.server_tool_call_turns == [0, 1]
+
+    @pytest.mark.smoke
+    def test_server_tool_call_turns_list_sorted(self):
+        """Explicit list of turn indices is sorted.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=4, server_tool_call_turns=[2, 0]
+        )
+        assert config.server_tool_call_turns == [0, 2]
+
+    @pytest.mark.sanity
+    def test_server_tool_call_turns_out_of_range_rejected(self):
+        """Indices must be within [0, turns).
+
+        ## WRITTEN BY AI ##
+        """
+
+        with pytest.raises(ValidationError, match="server_tool_call_turns index"):
+            SyntheticTextDataArgs(
+                prompt_tokens=50,
+                output_tokens=50,
+                turns=3,
+                server_tool_call_turns=[0, 3],
+            )
+
+    @pytest.mark.sanity
+    def test_server_tool_call_turns_duplicates_rejected(self):
+        """Duplicate indices are rejected.
+
+        ## WRITTEN BY AI ##
+        """
+
+        with pytest.raises(ValidationError, match="duplicates"):
+            SyntheticTextDataArgs(
+                prompt_tokens=50,
+                output_tokens=50,
+                turns=3,
+                server_tool_call_turns=[1, 1],
+            )
+
+    @pytest.mark.sanity
+    def test_overlap_with_tool_call_turns_rejected(self):
+        """server_tool_call_turns and tool_call_turns must not overlap.
+
+        ## WRITTEN BY AI ##
+        """
+
+        with pytest.raises(ValidationError, match="must not overlap"):
+            SyntheticTextDataArgs(
+                prompt_tokens=50,
+                output_tokens=50,
+                turns=4,
+                tool_call_turns=[0, 1],
+                server_tool_call_turns=[1, 2],
+            )
+
+    @pytest.mark.sanity
+    def test_no_overlap_accepted(self):
+        """Non-overlapping tool_call_turns and server_tool_call_turns are accepted.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50,
+            output_tokens=50,
+            turns=4,
+            tool_call_turns=[0, 1],
+            server_tool_call_turns=[2, 3],
+        )
+        assert config.tool_call_turns == [0, 1]
+        assert config.server_tool_call_turns == [2, 3]
+
+    @pytest.mark.sanity
+    def test_all_turns_server_tool_call(self):
+        """All turns can be server_tool_call_turns.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=3, server_tool_call_turns=3
+        )
+        assert config.server_tool_call_turns == [0, 1, 2]
+
+    @pytest.mark.smoke
+    def test_server_tool_call_turns_minus_one(self):
+        """
+        The value -1 expands to all turn indices.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=3, server_tool_call_turns=-1
+        )
+        assert config.server_tool_call_turns == [0, 1, 2]
+
+    @pytest.mark.smoke
+    def test_server_tool_call_turns_minus_one_single_turn(self):
+        """
+        The value -1 works with a single turn.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=1, server_tool_call_turns=-1
+        )
+        assert config.server_tool_call_turns == [0]
+
+    @pytest.mark.sanity
+    def test_server_tool_call_turns_minus_one_rejects_overlap(self):
+        """
+        Using -1 for server_tool_call_turns rejects overlap with tool_call_turns.
+
+        ## WRITTEN BY AI ##
+        """
+
+        with pytest.raises(ValidationError, match="must not overlap"):
+            SyntheticTextDataArgs(
+                prompt_tokens=50,
+                output_tokens=50,
+                turns=3,
+                tool_call_turns=[0],
+                server_tool_call_turns=-1,
+            )
+
+    @pytest.mark.sanity
+    def test_tool_call_turns_minus_one(self):
+        """
+        The value -1 expands to all turn indices for tool_call_turns.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=3, tool_call_turns=-1
+        )
+        assert config.tool_call_turns == [0, 1, 2]
+
+    @pytest.mark.sanity
+    def test_invalid_string_rejected(self):
+        """
+        Non-JSON strings are rejected.
+
+        ## WRITTEN BY AI ##
+        """
+
+        with pytest.raises(ValidationError, match="JSON int or list of ints"):
+            SyntheticTextDataArgs(
+                prompt_tokens=50,
+                output_tokens=50,
+                turns=3,
+                server_tool_call_turns="none",
+            )
+
+    @pytest.mark.smoke
+    def test_string_int_coercion(self):
+        """
+        A string int like "2" is coerced to int and normalized.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=3, server_tool_call_turns="2"
+        )
+        assert config.server_tool_call_turns == [0, 1]
+
+    @pytest.mark.smoke
+    def test_string_minus_one_coercion(self):
+        """
+        The string "-1" is coerced to -1 and expands to all turn indices.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=3, server_tool_call_turns="-1"
+        )
+        assert config.server_tool_call_turns == [0, 1, 2]
+
+    @pytest.mark.smoke
+    def test_string_list_coercion(self):
+        """
+        A JSON list string like "[0, 2]" is coerced to a list of ints.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=50, output_tokens=50, turns=4, server_tool_call_turns="[0, 2]"
+        )
+        assert config.server_tool_call_turns == [0, 2]
+
+
+class TestSyntheticDataServerToolCallColumnsAll:
+    """Verify synthetic data emits correct columns when server_tool_call_turns=-1.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.fixture
+    def processor(self):
+        """
+        Minimal mock processor for token encoding/decoding.
+
+        ## WRITTEN BY AI ##
+        """
+        proc = Mock()
+        proc.encode.return_value = list(range(100))
+        proc.decode.return_value = "mock text"
+        return proc
+
+    @pytest.mark.smoke
+    def test_all_turns_emit_turn_type_columns(self, processor):
+        """
+        All turns emit turn_type_N = "server_tool_call" when -1 is used.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=10, output_tokens=10, turns=3, server_tool_call_turns=-1
+        )
+        iterable = _SyntheticTextExamplesIterable(config, processor, random_seed=42)
+        _, row = next(iter(iterable))
+
+        assert row["turn_type_0"] == "server_tool_call"
+        assert row["turn_type_1"] == "server_tool_call"
+        assert row["turn_type_2"] == "server_tool_call"
+
+    @pytest.mark.sanity
+    def test_all_turns_features_include_all_turn_types(self, processor):
+        """
+        Features property includes turn_type_{i} for all turns when -1 is used.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=10, output_tokens=10, turns=3, server_tool_call_turns=-1
+        )
+        iterable = _SyntheticTextExamplesIterable(config, processor, random_seed=42)
+        features = iterable.features
+
+        assert "turn_type_0" in features
+        assert "turn_type_1" in features
+        assert "turn_type_2" in features
+
+
+class TestSyntheticDataServerToolCallColumns:
+    """Verify synthetic data emits turn_type_{turn} columns for server_tool_call_turns.
+
+    ## WRITTEN BY AI ##
+    """
+
+    @pytest.fixture
+    def processor(self):
+        """Minimal mock processor for token encoding/decoding.
+
+        ## WRITTEN BY AI ##
+        """
+        proc = Mock()
+        proc.encode.return_value = list(range(100))
+        proc.decode.return_value = "mock text"
+        return proc
+
+    @pytest.mark.smoke
+    def test_no_turn_type_columns_when_no_server_tool_call_turns(self, processor):
+        """With no server_tool_call_turns, no turn_type columns are emitted.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(prompt_tokens=10, output_tokens=10, turns=3)
+        iterable = _SyntheticTextExamplesIterable(config, processor, random_seed=42)
+        _, row = next(iter(iterable))
+
+        assert "turn_type_0" not in row
+        assert "turn_type_1" not in row
+        assert "turn_type_2" not in row
+
+    @pytest.mark.smoke
+    def test_turn_type_columns_emitted_for_server_tool_call_turns(self, processor):
+        """Server tool call turns emit turn_type_N = "server_tool_call".
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=10, output_tokens=10, turns=3, server_tool_call_turns=2
+        )
+        iterable = _SyntheticTextExamplesIterable(config, processor, random_seed=42)
+        _, row = next(iter(iterable))
+
+        assert row["turn_type_0"] == "server_tool_call"
+        assert row["turn_type_1"] == "server_tool_call"
+        assert "turn_type_2" not in row
+
+    @pytest.mark.smoke
+    def test_server_tool_call_turns_do_not_emit_tools_columns(self, processor):
+        """Server tool call turns do not emit tools_N or tool_response_N columns.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=10, output_tokens=10, turns=3, server_tool_call_turns=[0, 1]
+        )
+        iterable = _SyntheticTextExamplesIterable(config, processor, random_seed=42)
+        _, row = next(iter(iterable))
+
+        assert "tools_0" not in row
+        assert "tools_1" not in row
+        assert "tool_response_0" not in row
+        assert "tool_response_1" not in row
+
+    @pytest.mark.sanity
+    def test_mixed_client_and_server_tool_call_turns(self, processor):
+        """Client and server tool call turns emit different columns.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=10,
+            output_tokens=10,
+            turns=4,
+            tool_call_turns=[0],
+            server_tool_call_turns=[2, 3],
+        )
+        iterable = _SyntheticTextExamplesIterable(config, processor, random_seed=42)
+        _, row = next(iter(iterable))
+
+        # Client tool call turn 0: tools + tool_response, no turn_type
+        assert "tools_0" in row
+        assert "tool_response_0" in row
+        assert "turn_type_0" not in row
+
+        # Standard turn 1: no tools, no turn_type
+        assert "tools_1" not in row
+        assert "turn_type_1" not in row
+
+        # Server tool call turns 2 and 3: turn_type, no tools
+        assert "turn_type_2" in row
+        assert row["turn_type_2"] == "server_tool_call"
+        assert "tools_2" not in row
+        assert "turn_type_3" in row
+        assert row["turn_type_3"] == "server_tool_call"
+        assert "tools_3" not in row
+
+    @pytest.mark.sanity
+    def test_features_include_turn_type_columns(self, processor):
+        """Features property includes turn_type_{i} for server_tool_call_turns.
+
+        ## WRITTEN BY AI ##
+        """
+        config = SyntheticTextDataArgs(
+            prompt_tokens=10,
+            output_tokens=10,
+            turns=3,
+            server_tool_call_turns=[0, 2],
+        )
+        iterable = _SyntheticTextExamplesIterable(config, processor, random_seed=42)
+        features = iterable.features
+
+        assert "turn_type_0" in features
+        assert "turn_type_1" not in features
+        assert "turn_type_2" in features
+
+
 class TestSyntheticTextDatasetConfigToolResponseFields:
     """Validate tool_response_tokens fields on SyntheticTextDataArgs.
 
@@ -1071,7 +1474,6 @@ class TestSyntheticDataToolResponseColumns:
 
         ## WRITTEN BY AI ##
         """
-        from guidellm.settings import settings
 
         config = SyntheticTextDataArgs(
             prompt_tokens=10, output_tokens=10, turns=3, tool_call_turns=2

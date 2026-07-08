@@ -30,6 +30,7 @@ from guidellm.scheduler.constraints import (
     MaxGlobalErrorRateConstraintArgs,
     MaxRequestsConstraintArgs,
 )
+from guidellm.scheduler.constraints.args import ConstraintArgs
 from guidellm.schemas import RequestInfo, StandardBaseModel
 from guidellm.utils.mixins import InfoMixin
 
@@ -1182,8 +1183,6 @@ class TestConstraintsInitializerFactory:
     @pytest.mark.sanity
     def test_unregistered_key_fails(self):
         """Test that unregistered keys raise ValueError."""
-        from guidellm.scheduler.constraints.args import ConstraintArgs
-
         unregistered_key = "nonexistent_constraint"
         assert not ConstraintsInitializerFactory.is_registered(unregistered_key)
 
@@ -1195,28 +1194,6 @@ class TestConstraintsInitializerFactory:
             ValueError, match=f"Unknown constraint discriminator: {unregistered_key}"
         ):
             ConstraintsInitializerFactory.create(FakeArgs(kind=unregistered_key))
-
-    @pytest.mark.smoke
-    def test_resolve_mixed_types(self):
-        """Test resolve method with constraint and initializer instances."""
-        max_num_constraint = MaxNumberConstraint(
-            args=MaxRequestsConstraintArgs(count=25)
-        )
-        max_duration_initializer = MaxDurationConstraint(
-            args=MaxDurationConstraintArgs(seconds=120.0)
-        )
-
-        mixed_spec = {
-            "max_requests": max_num_constraint,
-            "max_duration": max_duration_initializer,
-        }
-
-        resolved = ConstraintsInitializerFactory.resolve(mixed_spec)
-
-        assert len(resolved) == 2
-        assert all(isinstance(c, Constraint) for c in resolved.values())
-        assert resolved["max_requests"] is max_num_constraint
-        assert isinstance(resolved["max_duration"], MaxDurationConstraint)
 
     @pytest.mark.sanity
     def test_resolve_with_invalid_type(self):

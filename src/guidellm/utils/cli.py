@@ -4,15 +4,10 @@ from typing import Any
 import click
 import yaml
 
-# NOTE: Sentinel is sentinel in newer (unreleased) version of typing_extensions
-# which matches the accepted version of PEP 661 in Python 3.15+
-# NOTE: Not sure why but mypy doesn't recognize Sentinel as a type
-from typing_extensions import Sentinel  # type: ignore[attr-defined]
-
 from guidellm.utils import arg_string
+from guidellm.utils.typing import BLANK
 
 __all__ = [
-    "BLANK",
     "Union",
     "decode_escaped_str",
     "overrides_to_benchmarks",
@@ -21,8 +16,6 @@ __all__ = [
     "parse_overrides",
     "set_if_not_default",
 ]
-
-BLANK = Sentinel("BLANK")
 
 
 def parse_list(ctx, param, value) -> list[str] | None:
@@ -50,13 +43,13 @@ def parse_list(ctx, param, value) -> list[str] | None:
 
     if isinstance(value, str) and "," in value:
         # Handle comma-separated strings
-        result = []
+        result: list[str] = []
         for item in value.split(","):
             stripped = item.strip()
             if stripped:
                 result.append(stripped)
             else:
-                result.append(BLANK)
+                result.append(BLANK)  # type: ignore[arg-type]
         return result
 
     if isinstance(value, str):
@@ -126,7 +119,7 @@ class Union(click.ParamType):
         self.types = types
         self.name = "".join(t.name for t in types)
 
-    def convert(self, value, param, ctx):
+    def convert(self, value, param, ctx):  # noqa: RET503
         fails = []
         for t in self.types:
             try:
@@ -135,7 +128,7 @@ class Union(click.ParamType):
                 fails.append(str(e))
                 continue
 
-        self.fail("; ".join(fails) or f"Invalid value: {value}")  # noqa: RET503
+        self.fail("; ".join(fails) or f"Invalid value: {value}")
 
     def get_metavar(self, param: click.Parameter, ctx: click.Context) -> str:
         def get_choices(t: click.ParamType) -> str:

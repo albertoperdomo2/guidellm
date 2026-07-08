@@ -16,7 +16,7 @@ from typing import Any, Generic, Literal, Protocol, TypeVar
 from pydantic import Field
 from typing_extensions import TypeAliasType
 
-from guidellm.schemas import RequestInfo, StandardBaseModel
+from guidellm.schemas import RequestInfo, RequestSettings, StandardBaseModel
 from guidellm.utils.registry import RegistryMixin, RegistryObjT
 
 __all__ = [
@@ -62,7 +62,9 @@ HistoryT = TypeAliasType(
 
 # NOTE: This is the interface between data and scheduler.
 DatasetIterT = TypeAliasType(
-    "DatasetIterT", Iterable[Iterable[RequestT]], type_params=(RequestT,)
+    "DatasetIterT",
+    Iterable[Iterable[tuple[RequestT, RequestSettings]]],
+    type_params=(RequestT,),
 )
 """
 Output of data loader, an iterable of batches,
@@ -291,7 +293,7 @@ class SchedulerUpdateAction(StandardBaseModel):
         description="Additional context and data for the scheduler action",
     )
     progress: SchedulerProgress = Field(
-        default_factory=lambda: SchedulerProgress(),
+        default_factory=SchedulerProgress,
         description="Progress information for the scheduler action",
     )
 
@@ -352,7 +354,7 @@ class SchedulerState(StandardBaseModel):
     )
 
     progress: SchedulerProgress = Field(
-        default_factory=lambda: SchedulerProgress(),
+        default_factory=SchedulerProgress,
         description="Overall progress information for the scheduler run",
     )
 

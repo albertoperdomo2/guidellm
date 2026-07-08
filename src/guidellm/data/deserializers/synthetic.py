@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import math
 from collections.abc import Callable, Iterator
 from random import Random
@@ -10,7 +9,7 @@ import numpy as np
 from datasets import DatasetInfo, Features, IterableDataset, Value
 from datasets.iterable_dataset import _BaseExamplesIterable
 from faker import Faker
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 from transformers import PreTrainedTokenizerBase
 
 from guidellm.data.deserializers.deserializer import (
@@ -20,7 +19,7 @@ from guidellm.data.deserializers.deserializer import (
 from guidellm.data.schemas import DataArgs
 from guidellm.settings import settings
 from guidellm.utils.imports import json
-from guidellm.utils.random import IntegerRangeSampler
+from guidellm.utils.random import FloatRangeSampler, IntegerRangeSampler
 
 __all__ = [
     "SyntheticTextDataArgs",
@@ -125,23 +124,60 @@ class SyntheticTextDataArgs(DataArgs):
         default=None,
         examples=[30],
     )
+    delay: float | None = Field(
+        description='The average requeue delay, or "think time" for prompts.',
+        gt=0,
+        default=None,
+        examples=[10.0],
+    )
+    delay_stdev: float | None = Field(
+        description=(
+            'The standard deviation of requeue delays, or "think time" for prompts.'
+        ),
+        gt=0,
+        default=None,
+        examples=[1.0],
+    )
+    delay_min: float | None = Field(
+        description='The minimum requeue delay, or "think time" for prompts.',
+        ge=0,
+        default=None,
+        examples=[0.5],
+    )
+    delay_max: float | None = Field(
+        description='The maximum requeue delay, or "think time" for prompts.',
+        gt=0,
+        default=None,
+        examples=[5.0],
+    )
     turns: int = Field(
-        description="The number of turns in the conversation.",
+        description=(
+            "The number of user turns in the conversation. "
+            "Each tool-calling user turn automatically generates an additional "
+            "tool_response_injection request, so the total request count per "
+            "conversation is turns + len(tool_call_turns)."
+        ),
         gt=0,
         default=1,
     )
     tool_call_turns: list[int] = Field(
-        description="Which turns should include tool definitions and expect "
-        "tool-call responses. An int N means 'the first N turns'; a list "
-        "of ints specifies explicit 0-based turn indices (e.g. [0, 2]). "
-        "Normalized to a sorted list after validation. "
-        "When 0 or [] (default), no tool calling is configured.",
+        description=(
+            "Which user turns should include tool definitions and expect "
+            "tool-call responses. Indices are 0-based into the user turns "
+            "(not the expanded request list). An int N means 'the first "
+            "N user turns'; a list of ints specifies explicit indices "
+            "(e.g. [0, 2]); -1 means all turns. Normalized to a sorted "
+            "list after validation. "
+            "When 0 or [] (default), no tool calling is configured."
+        ),
         default_factory=list,
         examples=[1, [0, 1]],
     )
     tools: list[dict[str, Any]] | None = Field(
-        description="Tool definitions in OpenAI format. When tool_call_turns is "
-        "non-empty and this is None, a static placeholder tool definition is used.",
+        description=(
+            "Tool definitions in OpenAI format. When tool_call_turns is non-empty "
+            "and this is None, a static placeholder tool definition is used."
+        ),
         default=None,
         examples=[
             {
@@ -161,8 +197,10 @@ class SyntheticTextDataArgs(DataArgs):
         ],
     )
     tool_response_tokens: int | None = Field(
-        description="Average number of tokens for synthetic tool call responses. "
-        "When None (default), a short placeholder response is used.",
+        description=(
+            "Average number of tokens for synthetic tool call responses. "
+            "When None (default), a short placeholder response is used."
+        ),
         gt=0,
         default=None,
         examples=[10],
@@ -184,6 +222,18 @@ class SyntheticTextDataArgs(DataArgs):
         gt=0,
         default=None,
         examples=[20],
+    )
+    server_tool_call_turns: list[int] = Field(
+        description=(
+            "Which user turns use server-side tool calling. "
+            "These turns are marked as server_tool_call so tool_choice='none' "
+            "is not applied, letting the server use its configured tools. "
+            "No injection turn is created. Must not overlap with "
+            "tool_call_turns. Indices are 0-based into user turns. "
+            "An int N means 'the first N user turns'; a list of ints "
+            "specifies explicit indices (e.g. [0, 2]); -1 means all turns."
+        ),
+        default_factory=list,
     )
 
     prefix_buckets: list[SyntheticTextPrefixBucketConfig] | None = Field(
@@ -216,29 +266,70 @@ class SyntheticTextDataArgs(DataArgs):
 
         return self
 
-    @field_validator("tool_call_turns", mode="before")
+    @field_validator("tool_call_turns", "server_tool_call_turns", mode="before")
     @classmethod
-    def _coerce_tool_call_turns(cls, v: int | list[int]) -> list[int]:
-        """Convert an int N to [0, ..., N-1]; pass lists through sorted."""
+    def _coerce_tool_call_turns(
+        cls, v: int | str | list[int], info: ValidationInfo
+    ) -> list[int]:
+        """Convert an int N to [0, ..., N-1]; pass lists through sorted.
+
+        Strings are parsed as JSON to support CLI/env-var coercion.
+        The value ``-1`` is converted to the sentinel ``[-1]`` which is
+        expanded to all turn indices by :meth:`_validate_tool_call_turn_indices`
+        once ``self.turns`` is available.
+        """
+        field = info.field_name
         if isinstance(v, str):
-            with contextlib.suppress(json.JSONDecodeError, ValueError):
+            try:
                 v = json.loads(v)
+            except (json.JSONDecodeError, ValueError) as err:
+                raise ValueError(
+                    f"{field} string must be a JSON int or list of ints, got {v!r}"
+                ) from err
         if isinstance(v, int):
+            if v == -1:
+                return [-1]
             if v < 0:
-                raise ValueError("tool_call_turns int must be >= 0")
+                raise ValueError(f"{field} int must be >= 0 or -1 for all")
             return list(range(v))
+        if not isinstance(v, list):
+            raise ValueError(
+                f"{field} must be int, list[int], or a JSON representation"
+                f" of either, got {type(v)}"
+            )
         if len(v) != len(set(v)):
-            raise ValueError("tool_call_turns list must not contain duplicates")
+            raise ValueError(f"{field} list must not contain duplicates")
         return sorted(v)
 
     @model_validator(mode="after")
     def _validate_tool_call_turn_indices(self) -> SyntheticTextDataArgs:
-        """Ensure all tool_call_turns indices are within [0, turns)."""
+        """Ensure all tool call turn indices are within [0, turns) and don't overlap.
+
+        The sentinel ``[-1]`` is expanded to ``list(range(self.turns))``
+        before validation.
+        """
+        # Expand -1 sentinel ("all turns") for both fields
+        if self.tool_call_turns == [-1]:
+            self.tool_call_turns = list(range(self.turns))
+        if self.server_tool_call_turns == [-1]:
+            self.server_tool_call_turns = list(range(self.turns))
+
         for idx in self.tool_call_turns:
             if idx < 0 or idx >= self.turns:
                 raise ValueError(
                     f"tool_call_turns index {idx} out of range [0, {self.turns})"
                 )
+        for idx in self.server_tool_call_turns:
+            if idx < 0 or idx >= self.turns:
+                raise ValueError(
+                    f"server_tool_call_turns index {idx} out of range [0, {self.turns})"
+                )
+        overlap = set(self.tool_call_turns) & set(self.server_tool_call_turns)
+        if overlap:
+            raise ValueError(
+                f"tool_call_turns and server_tool_call_turns must not overlap; "
+                f"overlapping indices: {sorted(overlap)}"
+            )
         return self
 
 
@@ -285,14 +376,29 @@ class _SyntheticTextExamplesIterable(_BaseExamplesIterable):
             if self.config.output_tokens is not None
             else None
         )
+        delay_sampler = (
+            iter(
+                FloatRangeSampler(
+                    average=self.config.delay,
+                    variance=self.config.delay_stdev,
+                    min_value=self.config.delay_min,
+                    max_value=self.config.delay_max,
+                    # ensure diff dist from prompts and outputs
+                    random_seed=iter_random_seed + 2,
+                )
+            )
+            if self.config.delay is not None
+            else None
+        )
 
         # Create a shared prefix if specified
         rand = Random(iter_random_seed + 3)
         prefix_iter = self._create_prefix_iter(faker, rand)
         samples_count = 0
 
-        # Resolve tool definitions for tool-call turns
+        # Resolve tool definitions for client-side tool-call turns
         tool_call_turns_set = set(self.config.tool_call_turns)
+        server_tool_call_turns_set = set(self.config.server_tool_call_turns)
         tools_defs: list[dict[str, Any]] | None = None
         if tool_call_turns_set:
             tools_defs = self.config.tools or DEFAULT_SYNTHETIC_TOOLS
@@ -317,6 +423,7 @@ class _SyntheticTextExamplesIterable(_BaseExamplesIterable):
                 if output_tokens_sampler is not None
                 else None
             )
+            delay = next(delay_sampler) if delay_sampler is not None else None
 
             row: dict[str, Any] = {"prefix": next(prefix_iter)}
             for turn in range(self.config.turns):
@@ -328,6 +435,8 @@ class _SyntheticTextExamplesIterable(_BaseExamplesIterable):
                 row[f"prompt_tokens_count_{turn}"] = prompt_tokens_count
                 if output_tokens_count is not None:
                     row[f"output_tokens_count_{turn}"] = output_tokens_count
+                if delay is not None:
+                    row[f"requeue_delay_{turn}"] = delay
 
                 if tools_defs is not None and turn in tool_call_turns_set:
                     row[f"tools_{turn}"] = json.dumps(tools_defs)
@@ -340,6 +449,9 @@ class _SyntheticTextExamplesIterable(_BaseExamplesIterable):
                         row[f"tool_response_{turn}"] = (
                             settings.default_synthetic_tool_response
                         )
+
+                if turn in server_tool_call_turns_set:
+                    row[f"turn_type_{turn}"] = "server_tool_call"
 
                 samples_count += 1
 
@@ -357,12 +469,17 @@ class _SyntheticTextExamplesIterable(_BaseExamplesIterable):
             features[f"prompt_tokens_count_{i}"] = Value("int32")
             if self.config.output_tokens is not None:
                 features[f"output_tokens_count_{i}"] = Value("int32")
+            if self.config.delay is not None:
+                features[f"requeue_delay_{i}"] = Value("float")
 
             if i in set(self.config.tool_call_turns):
                 # Tools column is a JSON-serialised list; store as string
                 # to keep the HuggingFace Features schema simple.
                 features[f"tools_{i}"] = Value("large_string")
                 features[f"tool_response_{i}"] = Value("large_string")
+
+            if i in set(self.config.server_tool_call_turns):
+                features[f"turn_type_{i}"] = Value("string")
 
         return Features(features)
 
