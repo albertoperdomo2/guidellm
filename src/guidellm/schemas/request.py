@@ -15,7 +15,6 @@ from typing import Any, Literal
 from pydantic import Field, computed_field
 
 from guidellm.schemas.base import StandardBaseDict, StandardBaseModel
-from guidellm.schemas.info import RequestSettings
 from guidellm.utils.dict import deep_update
 
 TurnType = Literal[
@@ -71,6 +70,13 @@ class GenerationRequestArguments(StandardBaseDict):
     files: dict[str, Any] | None = Field(
         default=None,
         description="Files to include in the request, if applicable.",
+    )
+    content: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Additional fields to include in generated text content objects, "
+            "if applicable."
+        ),
     )
 
     def model_combine(
@@ -272,11 +278,4 @@ class GenerationRequest(StandardBaseModel):
     output_metrics: UsageMetrics = Field(
         default_factory=UsageMetrics,
         description="Output statistics including counts, sizes, and durations.",
-    )
-    settings: RequestSettings = Field(
-        default_factory=RequestSettings,
-        description=(
-            "Per-request scheduling metadata from the dataset finalizer, "
-            "for example trace replay relative timestamps."
-        ),
     )

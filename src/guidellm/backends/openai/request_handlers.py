@@ -126,6 +126,18 @@ class OpenAIRequestHandler(Protocol):
         """
         ...
 
+    def post_validation(self, response: GenerationResponse) -> None:
+        """Validate a compiled response before returning it.
+
+        Default implementation is permissive (no-op). Handlers override
+        this to reject responses that lack usable output for their
+        endpoint type.
+
+        :param response: The compiled generation response to validate.
+        :raises ValueError: If the response is unusable.
+        """
+        ...
+
 
 class OpenAIRequestHandlerFactory(RegistryMixin[type[OpenAIRequestHandler]]):
     """
@@ -272,6 +284,18 @@ class OpenAIWSRequestHandler(Protocol):
         """
         ...
 
+    def post_validation(self, response: GenerationResponse) -> None:
+        """Validate a compiled response before returning it.
+
+        Default implementation is permissive (no-op). Handlers override
+        this to reject responses that lack usable output for their
+        endpoint type.
+
+        :param response: The compiled generation response to validate.
+        :raises ValueError: If the response is unusable.
+        """
+        ...
+
 
 class OpenAIWSRequestHandlerFactory(RegistryMixin["type[OpenAIWSRequestHandler]"]):
     """Factory for registering and creating WebSocket request handlers by path."""
@@ -315,6 +339,24 @@ def _apply_tool_call_metrics(
         output_metrics.tool_call_tokens = output_metrics.text_tokens
     else:  # mixed content + tool call turn
         output_metrics.mixed_content_tool_tokens = output_metrics.text_tokens
+
+
+def _validate_text_response(response: GenerationResponse) -> None:
+    """Reject a compiled response that has no usable output.
+
+    A response is considered usable if it has non-empty text, tool calls,
+    or output tokens. Used by text/chat completions and responses handlers.
+
+    :param response: The compiled generation response to validate.
+    :raises ValueError: If the response contains no usable output.
+    """
+    has_text = bool(response.text and response.text.strip())
+    has_tool_calls = bool(response.tool_calls)
+    output_tokens = response.output_metrics.total_tokens or 0
+    if not has_text and not has_tool_calls and output_tokens <= 0:
+        raise ValueError(
+            "[UNUSABLE_BACKEND_RESPONSE] backend resolved with empty response payload"
+        )
 
 
 _DEFAULT_REASONING_TEMPLATE = "<think>{reasoning}</think>"
@@ -571,6 +613,10 @@ class TextCompletionsRequestHandler(OpenAIRequestHandler):
             output_metrics=output_metrics,
         )
 
+    def post_validation(self, response: GenerationResponse) -> None:
+        """Reject responses with no text, tool calls, or output tokens."""
+        _validate_text_response(response)
+
     def extract_line_data(self, line: str) -> dict[str, Any] | None:
         """
         Extract JSON data from a streaming response line.
@@ -710,7 +756,10 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
         return tool
 
     def _format_prompts(
-        self, column_data: list[dict[str, Any]], column_type: str
+        self,
+        column_data: list,
+        column_type: str,
+        content_extras: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Helper method to format different types of data columns
@@ -719,7 +768,10 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
         formatted_data = []
         for item in column_data:
             if column_type == "text_column":
-                formatted_data.append({"type": "text", "text": item})
+                content = {"type": "text", "text": item}
+                if content_extras:
+                    content.update(content_extras)
+                formatted_data.append(content)
             elif column_type == "image_column":
                 formatted_data.append(
                     {
@@ -913,8 +965,14 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
             if prefix:
                 messages.append({"role": "system", "content": prefix})
 
+            extras = kwargs.get("extras")
+            content_extras = extras.content if extras is not None else None
             prompts = [
-                self._format_prompts(req.columns.get(col, []), col)
+                self._format_prompts(
+                    req.columns.get(col, []),
+                    col,
+                    content_extras,
+                )
                 for col in (
                     "text_column",
                     "image_column",
@@ -1021,8 +1079,14 @@ class ChatCompletionsRequestHandler(TextCompletionsRequestHandler):
             if prefix:
                 arguments.body["messages"].append({"role": "system", "content": prefix})
 
+            extras = kwargs.get("extras")
+            content_extras = extras.content if extras is not None else None
             prompts = [
-                self._format_prompts(data.columns.get(col, []), col)
+                self._format_prompts(
+                    data.columns.get(col, []),
+                    col,
+                    content_extras,
+                )
                 for col in (
                     "text_column",
                     "image_column",
@@ -1500,12 +1564,18 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
         return tool
 
     def _format_prompts(
-        self, column_data: list, column_type: str
+        self,
+        column_data: list,
+        column_type: str,
+        content_extras: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         formatted_data: list[dict[str, Any]] = []
         for item in column_data:
             if column_type == "text_column":
-                formatted_data.append({"type": "input_text", "text": item})
+                content = {"type": "input_text", "text": item}
+                if content_extras:
+                    content.update(content_extras)
+                formatted_data.append(content)
             elif column_type == "image_column":
                 formatted_data.append(
                     {
@@ -1585,8 +1655,14 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
                 items.append({"role": "assistant", "content": content})
         else:
             # Standard or tool_call turn: user content.
+            extras = kwargs.get("extras")
+            content_extras = extras.content if extras is not None else None
             prompts = [
-                self._format_prompts(req.columns.get(col, []), col)
+                self._format_prompts(
+                    req.columns.get(col, []),
+                    col,
+                    content_extras,
+                )
                 for col in (
                     "text_column",
                     "image_column",
@@ -1754,8 +1830,14 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
                 )
         elif data.turn_type != "tool_response_injection":
             # Standard or tool_call turn: user content.
+            extras = kwargs.get("extras")
+            content_extras = extras.content if extras is not None else None
             prompts = [
-                self._format_prompts(data.columns.get(col, []), col)
+                self._format_prompts(
+                    data.columns.get(col, []),
+                    col,
+                    content_extras,
+                )
                 for col in (
                     "text_column",
                     "image_column",
@@ -1850,6 +1932,10 @@ class ResponsesRequestHandler(OpenAIRequestHandler):
             self.extract_metrics,
             streaming_reasoning_texts=self.streaming_reasoning_texts,
         )
+
+    def post_validation(self, response: GenerationResponse) -> None:
+        """Reject responses with no text, tool calls, or output tokens."""
+        _validate_text_response(response)
 
     def extract_line_data(self, line: str) -> dict[str, Any] | None:
         """Parse a Responses API SSE line.
@@ -2149,6 +2235,9 @@ class PoolingRequestHandler(ChatCompletionsRequestHandler):
     Inherits from ChatCompletionsRequestHandler and overrides format() to handle
     pooling-specific request structure with nested data fields.
     """
+
+    def post_validation(self, response: GenerationResponse) -> None:  # noqa: ARG002
+        """Pooling responses produce non-text output; skip validation."""
 
     def format(
         self,

@@ -234,6 +234,8 @@ class OpenAIHTTPBackend(Backend):
         await backend.process_shutdown()
     """
 
+    _args: OpenAIHTTPBackendArgs
+
     def __init__(
         self,
         arguments: OpenAIHTTPBackendArgs,
@@ -242,20 +244,10 @@ class OpenAIHTTPBackend(Backend):
         Initialize OpenAI HTTP backend with server configuration.
         """
         super().__init__(arguments)
-        self._args = arguments
 
         # Runtime state
         self._in_process = False
         self._async_client: httpx.AsyncClient | None = None
-
-    @property
-    def info(self) -> dict[str, Any]:
-        """
-        Get backend configuration details.
-
-        :return: Dictionary containing backend configuration details
-        """
-        return self._args.model_dump()
 
     async def process_startup(self):
         """
@@ -491,6 +483,7 @@ class OpenAIHTTPBackend(Backend):
         response.raise_for_status()
         data = response.json()
         gen_response = request_handler.compile_non_streaming(request, arguments, data)
+        request_handler.post_validation(gen_response)
         yield gen_response, request_info
         self._check_tool_call_expectations(request, gen_response)
 
@@ -557,6 +550,7 @@ class OpenAIHTTPBackend(Backend):
 
             request_info.timings.request_end = time.time()
             gen_response = request_handler.compile_streaming(request, arguments)
+            request_handler.post_validation(gen_response)
             self._check_tool_call_expectations(request, gen_response)
             yield gen_response, request_info
         except asyncio.CancelledError as err:

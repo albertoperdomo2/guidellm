@@ -8,6 +8,7 @@ where = ["src"]
 include = ["*"]
 
 [tool.setuptools.package-data]
+guidellm = ["py.typed"]
 "guidellm.data" = ["*.gz"]
 "guidellm.benchmark.scenarios" = ["*.json", "**/*.json"]
 
@@ -58,7 +59,7 @@ keywords = [
     "vllm",
 ]
 dependencies = [
-    "click~=8.3.0",
+    "click~=8.4.0",
     "culsans~=0.10.0",
     "datasets>=4.1.0",
     "eval_type_backport",
@@ -80,14 +81,15 @@ dependencies = [
     "torch",
     "more-itertools>=10.8.0",
     "typing-extensions>=4.15.0",
-    "websockets>=13.0",
+    "websockets>=13.0"
 ]
 
 [project.optional-dependencies]
 # Meta Extras
-all = ["guidellm[perf,tokenizers,audio,vision]"]
+all = ["guidellm[perf,tokenizers,audio,vision,plot]"]
 recommended = ["guidellm[perf,tokenizers]"]
 # Feature Extras
+plot = ["matplotlib>=3.10.9"]
 perf = ["orjson", "msgpack", "msgspec", "uvloop"]
 tokenizers = ["tiktoken", "blobfile", "mistral-common"]
 audio = [
@@ -140,6 +142,7 @@ test = [
     "pytest-timeout~=2.4.0",
     "pytest-httpx~=0.36.2",
     "respx~=0.23.1",
+    "trio~=0.33.0",
 ]
 env = [
     "pre-commit",
@@ -291,7 +294,7 @@ select = [
     "N806",    # allow uppercase variable names in tests
     "PGH003",  # allow general ignores in tests
     "S106",    # allow hardcoded passwords in tests
-    "PLR0915", # allow complext statements in tests
+    "PLR0915", # allow complex statements in tests
 ]
 "scripts/**/*.py" = [
     "T201",    # print statements are the primary output mechanism for scripts

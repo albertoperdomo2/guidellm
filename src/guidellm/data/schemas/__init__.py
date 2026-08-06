@@ -3,6 +3,11 @@ from .base import (
     DatasetType,
     GenerativeDatasetColumnType,
 )
+from .conversation_graph_data import (
+    ConversationGraphData,
+    ConversationParentRef,
+    ConversationTurnData,
+)
 from .entrypoints import (
     DataArgs,
     DataFinalizerArgs,
@@ -10,9 +15,20 @@ from .entrypoints import (
     DataPreprocessorArgs,
     DataTokenizerArgs,
 )
-from .preprocess import PreprocessDatasetConfig
+from .preprocess import (
+    ConcatenatePreprocessStrategyArgs,
+    ErrorPreprocessStrategyArgs,
+    IgnorePreprocessStrategyArgs,
+    PadPreprocessStrategyArgs,
+    PreprocessStrategyArgs,
+    PromptTooShortError,
+)
 
 __all__ = [
+    "ConcatenatePreprocessStrategyArgs",
+    "ConversationGraphData",
+    "ConversationParentRef",
+    "ConversationTurnData",
     "DataArgs",
     "DataFinalizerArgs",
     "DataLoaderArgs",
@@ -20,6 +36,10 @@ __all__ = [
     "DataPreprocessorArgs",
     "DataTokenizerArgs",
     "DatasetType",
+    "ErrorPreprocessStrategyArgs",
     "GenerativeDatasetColumnType",
-    "PreprocessDatasetConfig",
+    "IgnorePreprocessStrategyArgs",
+    "PadPreprocessStrategyArgs",
+    "PreprocessStrategyArgs",
+    "PromptTooShortError",
 ]

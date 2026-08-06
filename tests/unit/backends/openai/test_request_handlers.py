@@ -29,7 +29,13 @@ from guidellm.data.finalizers.generative import (
     GenerativeRequestFinalizer,
     GenerativeRequestFinalizerArgs,
 )
-from guidellm.schemas import GenerationRequest, GenerationResponse, UsageMetrics
+from guidellm.schemas import (
+    GenerationRequest,
+    GenerationRequestArguments,
+    GenerationResponse,
+    UsageMetrics,
+)
+from guidellm.schemas.conversation_graph import GenerativeConversationGraph
 from guidellm.schemas.tool_call import ToolCall, ToolCallFunction
 from guidellm.settings import settings
 from guidellm.utils.registry import RegistryMixin
@@ -502,7 +508,7 @@ class TestTextCompletionsRequestHandler:
         """
         instance = valid_instances
         data = GenerationRequest()
-        extras = {"body": {"temperature": 0.7, "top_p": 0.9}}
+        extras = GenerationRequestArguments(body={"temperature": 0.7, "top_p": 0.9})
 
         result = instance.format(data, extras=extras)
 
@@ -575,9 +581,6 @@ class TestTextCompletionsRequestHandler:
                 10,
                 5,
             ),
-            ({"choices": [{"text": ""}], "usage": {}}, "", None, None),
-            ({"choices": [], "usage": {}}, "", None, None),
-            ({}, "", None, None),
         ],
     )
     def test_non_streaming(
@@ -638,7 +641,6 @@ class TestTextCompletionsRequestHandler:
                 None,
                 None,
             ),
-            (["", "data: [DONE]"], "", None, None),
         ],
     )
     def test_streaming(
@@ -671,6 +673,52 @@ class TestTextCompletionsRequestHandler:
         assert response.output_metrics.text_tokens == expected_output_tokens
         assert response.output_metrics.text_words == len(expected_text.split())
         assert response.output_metrics.text_characters == len(expected_text)
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"choices": [{"text": ""}], "usage": {}},
+            {"choices": [], "usage": {}},
+            {},
+        ],
+    )
+    def test_non_streaming_raises_for_unusable_terminal_payload(
+        self, valid_instances, generation_request, response
+    ):
+        """Test unusable non-streaming text response raises.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+        compiled = instance.compile_non_streaming(
+            generation_request, arguments, response
+        )
+
+        with pytest.raises(ValueError, match="UNUSABLE_BACKEND_RESPONSE"):
+            instance.post_validation(compiled)
+
+    @pytest.mark.regression
+    def test_streaming_raises_for_unusable_terminal_payload(
+        self, valid_instances, generation_request
+    ):
+        """Test unusable streaming text response raises.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        for line in ["", "data: [DONE]"]:
+            result = instance.add_streaming_line(line)
+            if result is None:
+                break
+
+        compiled = instance.compile_streaming(generation_request, arguments)
+
+        with pytest.raises(ValueError, match="UNUSABLE_BACKEND_RESPONSE"):
+            instance.post_validation(compiled)
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
@@ -925,7 +973,7 @@ class TestChatCompletionsRequestHandler:
         """
         instance = valid_instances
         data = GenerationRequest()
-        extras = {"body": {"temperature": 0.5, "top_k": 40}}
+        extras = GenerationRequestArguments(body={"temperature": 0.5, "top_k": 40})
 
         result = instance.format(data, extras=extras)
 
@@ -952,6 +1000,35 @@ class TestChatCompletionsRequestHandler:
         assert result.body["messages"][0]["content"][0]["text"] == "Hello"
         assert result.body["messages"][0]["content"][1]["type"] == "text"
         assert result.body["messages"][0]["content"][1]["text"] == "How are you?"
+
+    @pytest.mark.regression
+    def test_content_extras_enrich_plain_text_only(self, valid_instances):
+        """Content extras enrich text without changing multimodal parts.
+
+        ## WRITTEN BY AI ##
+        """
+        data = GenerationRequest(
+            columns={
+                "text_column": ["Describe this"],
+                "image_column": [{"image": "https://example.com/image.jpg"}],
+            }
+        )
+
+        result = valid_instances.format(
+            data,
+            extras=GenerationRequestArguments(
+                content={
+                    "metadata": {"category": "vision"},
+                    "priority": 1,
+                }
+            ),
+        )
+
+        text_content, image_content = result.body["messages"][0]["content"]
+        assert text_content["metadata"] == {"category": "vision"}
+        assert text_content["priority"] == 1
+        assert "metadata" not in image_content
+        assert "priority" not in image_content
 
     @pytest.mark.sanity
     def test_format_messages_prefix(self, valid_instances):
@@ -1112,18 +1189,6 @@ class TestChatCompletionsRequestHandler:
                 10,
                 5,
             ),
-            (
-                {"choices": [{"message": {"content": ""}}], "usage": {}},
-                "",
-                None,
-                None,
-            ),
-            (
-                {"choices": [], "usage": {}},
-                "",
-                None,
-                None,
-            ),
         ],
     )
     def test_non_streaming(
@@ -1177,12 +1242,6 @@ class TestChatCompletionsRequestHandler:
                 None,
                 None,
             ),
-            (
-                ["", "data: [DONE]"],
-                "",
-                None,
-                None,
-            ),
         ],
     )
     def test_streaming(
@@ -1214,6 +1273,86 @@ class TestChatCompletionsRequestHandler:
         assert response.input_metrics.text_tokens == expected_input_tokens
         assert response.output_metrics.text_tokens == expected_output_tokens
 
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"choices": [{"message": {"content": ""}}], "usage": {}},
+            {"choices": [], "usage": {}},
+        ],
+    )
+    def test_non_streaming_raises_for_unusable_terminal_payload(
+        self, valid_instances, generation_request, response
+    ):
+        """Test unusable non-streaming chat response raises.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+        compiled = instance.compile_non_streaming(
+            generation_request, arguments, response
+        )
+
+        with pytest.raises(ValueError, match="UNUSABLE_BACKEND_RESPONSE"):
+            instance.post_validation(compiled)
+
+    @pytest.mark.regression
+    def test_streaming_raises_for_unusable_terminal_payload(
+        self, valid_instances, generation_request
+    ):
+        """Test unusable streaming chat response raises.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        for line in ["", "data: [DONE]"]:
+            result = instance.add_streaming_line(line)
+            if result is None:
+                break
+
+        compiled = instance.compile_streaming(generation_request, arguments)
+
+        with pytest.raises(ValueError, match="UNUSABLE_BACKEND_RESPONSE"):
+            instance.post_validation(compiled)
+
+    @pytest.mark.regression
+    def test_non_streaming_tool_call_only_passes_validation(
+        self, valid_instances, generation_request
+    ):
+        """Tool-call-only response (no text) is valid and must not raise.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"city":"NYC"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        result = instance.compile_non_streaming(generation_request, arguments, response)
+        instance.post_validation(result)
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+
     @pytest.mark.sanity
     def test_streaming_reasoning_tokens(self, valid_instances, generation_request):
         """Test that reasoning tokens are properly detected for TTFT measurement.
@@ -1228,15 +1367,12 @@ class TestChatCompletionsRequestHandler:
         arguments = instance.format(generation_request)
 
         lines = [
-            # First chunk has reasoning token
             (
                 'data: {"id": "chatcmpl-123", "choices": '
                 '[{"index": 0, "delta": {"reasoning": "Okay"}}], "usage": {}}'
             ),
-            # More reasoning tokens
             'data: {"choices": [{"delta": {"reasoning": ", let me"}}], "usage": {}}',
             'data: {"choices": [{"delta": {"reasoning": " think..."}}], "usage": {}}',
-            # Finally content tokens
             'data: {"choices": [{"delta": {"content": "Hello"}}], "usage": {}}',
             (
                 'data: {"choices": [{"delta": {"content": " world!"}}], '
@@ -1256,17 +1392,13 @@ class TestChatCompletionsRequestHandler:
             elif result is None:
                 break
 
-        # Verify that the first update happened on the first reasoning token (line 0)
         assert first_update_on_line == 0, (
             f"Expected first token detection on line 0 (reasoning token), "
             f"but got {first_update_on_line}"
         )
-
-        # Verify all chunks with content were counted (5 lines with tokens)
         assert updated_count == 5
 
         response = instance.compile_streaming(generation_request, arguments)
-        # Reasoning tokens should NOT appear in response.text; only content does
         assert "Okay" not in response.text
         assert "let me think..." not in response.text
         assert response.text == "Hello world!"
@@ -1289,7 +1421,6 @@ class TestChatCompletionsRequestHandler:
         arguments = instance.format(generation_request)
 
         lines = [
-            # Chunk with both reasoning and content (edge case)
             (
                 'data: {"choices": [{"delta": '
                 '{"reasoning": "Let me think...", "content": "Answer: "}}], '
@@ -1307,12 +1438,9 @@ class TestChatCompletionsRequestHandler:
             if result > 0:
                 updated_count += 1
 
-        # First chunk has both reasoning and content (counts as 1 iteration)
-        # Second chunk has content only (counts as 1 iteration)
         assert updated_count == 2
 
         response = instance.compile_streaming(generation_request, arguments)
-        # Reasoning text should NOT appear; only content is captured
         assert "Let me think..." not in response.text
         assert response.text == "Answer: 42"
 
@@ -2061,7 +2189,10 @@ class TestChatCompletionsRequestHandler:
             turn_type="standard",
         )
 
-        result = instance.format(data, extras={"body": {"tool_choice": "required"}})
+        result = instance.format(
+            data,
+            extras=GenerationRequestArguments(body={"tool_choice": "required"}),
+        )
 
         assert "tool_choice" not in result.body
         assert "tools" not in result.body
@@ -2273,7 +2404,7 @@ class TestAudioRequestHandler:
                 ]
             },
         )
-        extras = {"body": {"language": "en", "temperature": 0.0}}
+        extras = GenerationRequestArguments(body={"language": "en", "temperature": 0.0})
 
         result = instance.format(data, extras=extras)
 
@@ -2626,6 +2757,30 @@ class TestChatCompletionsRequestHandlerMultiturn:
         assert messages[1]["content"] == "The answer is 4"
         assert messages[2]["role"] == "user"
 
+    @pytest.mark.regression
+    def test_content_extras_apply_to_history_and_current_turn(self, valid_instances):
+        """Content extras are applied consistently across conversation turns.
+
+        ## WRITTEN BY AI ##
+        """
+        prev_request = GenerationRequest(columns={"text_column": ["Previous"]})
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="Previous response",
+        )
+        data = GenerationRequest(columns={"text_column": ["Current"]})
+
+        result = valid_instances.format(
+            data,
+            history=[(prev_request, prev_response)],
+            extras=GenerationRequestArguments(content={"priority": 3}),
+        )
+
+        messages = result.body["messages"]
+        assert messages[0]["content"][0]["priority"] == 3
+        assert messages[2]["content"][0]["priority"] == 3
+
     @pytest.mark.sanity
     def test_chat_format_with_multi_turn_history(self, valid_instances):
         """Test format with multiple turns alternates user/assistant.
@@ -2812,6 +2967,56 @@ class TestResponsesRequestHandler:
         """
         handler = OpenAIRequestHandlerFactory.create("/v1/responses")
         assert isinstance(handler, ResponsesRequestHandler)
+
+    @pytest.mark.regression
+    def test_content_extras_enrich_text(self, valid_instances):
+        """Content extras are added to Responses API text content.
+
+        ## WRITTEN BY AI ##
+        """
+        data = GenerationRequest(columns={"text_column": ["Handle this request"]})
+
+        result = valid_instances.format(
+            data,
+            extras=GenerationRequestArguments(
+                content={
+                    "priority": 2,
+                    "metadata": {"category": "support"},
+                }
+            ),
+        )
+
+        content = result.body["input"][0]["content"][0]
+        assert content == {
+            "type": "input_text",
+            "text": "Handle this request",
+            "priority": 2,
+            "metadata": {"category": "support"},
+        }
+
+    @pytest.mark.regression
+    def test_content_extras_apply_to_history_and_current_turn(self, valid_instances):
+        """Content extras apply to all Responses API conversation turns.
+
+        ## WRITTEN BY AI ##
+        """
+        prev_request = GenerationRequest(columns={"text_column": ["Previous"]})
+        prev_response = GenerationResponse(
+            request_id="prev",
+            request_args=None,
+            text="Previous response",
+        )
+        data = GenerationRequest(columns={"text_column": ["Current"]})
+
+        result = valid_instances.format(
+            data,
+            history=[(prev_request, prev_response)],
+            extras=GenerationRequestArguments(content={"priority": 3}),
+        )
+
+        input_items = result.body["input"]
+        assert input_items[0]["content"][0]["priority"] == 3
+        assert input_items[2]["content"][0]["priority"] == 3
 
     @pytest.mark.smoke
     def test_format_minimal(self, valid_instances):
@@ -3002,18 +3207,6 @@ class TestResponsesRequestHandler:
                 10,
                 8,
             ),
-            (
-                {"id": "resp_789", "output": [], "usage": {}},
-                "",
-                None,
-                None,
-            ),
-            (
-                {"output": []},
-                "",
-                None,
-                None,
-            ),
         ],
     )
     def test_non_streaming(
@@ -3104,29 +3297,6 @@ class TestResponsesRequestHandler:
                     "data: [DONE]",
                 ],
                 "Test",
-                None,
-                None,
-            ),
-            (
-                [
-                    "event: response.created",
-                    (
-                        "data: {"
-                        '"type":"response.created",'
-                        '"response":{"id":"resp_3"},'
-                        '"sequence_number":0}'
-                    ),
-                    "",
-                    "event: response.completed",
-                    (
-                        "data: {"
-                        '"type":"response.completed",'
-                        '"response":{"id":"resp_3","usage":{}},'
-                        '"sequence_number":2}'
-                    ),
-                    "data: [DONE]",
-                ],
-                "",
                 None,
                 None,
             ),
@@ -3289,20 +3459,6 @@ class TestResponsesRequestHandler:
                 10,
                 2,
             ),
-            (
-                [
-                    "event: response.failed",
-                    (
-                        "data: {"
-                        '"type":"response.failed",'
-                        '"response":{"id":"resp_fail_no_usage"},'
-                        '"sequence_number":1}'
-                    ),
-                ],
-                "",
-                None,
-                None,
-            ),
         ],
     )
     def test_streaming_terminal_events(
@@ -3331,6 +3487,57 @@ class TestResponsesRequestHandler:
         assert response.text == expected_text
         assert response.input_metrics.text_tokens == expected_input_tokens
         assert response.output_metrics.text_tokens == expected_output_tokens
+
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"output": [], "usage": {}},
+            {"output": [{"type": "message", "content": []}], "usage": {}},
+        ],
+    )
+    def test_non_streaming_raises_for_unusable_terminal_payload(
+        self, valid_instances, generation_request, response
+    ):
+        """Responses API empty output raises UNUSABLE_BACKEND_RESPONSE.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+
+        compiled = instance.compile_non_streaming(
+            generation_request, arguments, response
+        )
+
+        with pytest.raises(ValueError, match="UNUSABLE_BACKEND_RESPONSE"):
+            instance.post_validation(compiled)
+
+    @pytest.mark.regression
+    def test_non_streaming_tool_call_only_passes_validation(
+        self, valid_instances, generation_request
+    ):
+        """Tool-call-only Responses API output is valid and must not raise.
+
+        ### WRITTEN BY AI ###
+        """
+        instance = valid_instances
+        arguments = instance.format(generation_request)
+        response = {
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city":"NYC"}',
+                }
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+        result = instance.compile_non_streaming(generation_request, arguments, response)
+        instance.post_validation(result)
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
 
     @pytest.mark.sanity
     def test_streaming_reasoning_triggers_ttft_not_content(
@@ -4347,7 +4554,10 @@ class TestResponsesRequestHandler:
         tools = [{"type": "function", "function": {"name": "fn", "parameters": {}}}]
         data = GenerationRequest(turn_type="standard")
 
-        result = instance.format(data, extras={"body": {"tools": tools}})
+        result = instance.format(
+            data,
+            extras=GenerationRequestArguments(body={"tools": tools}),
+        )
 
         assert result.body["tools"] == tools
         assert result.body["tool_choice"] == "none"
@@ -4366,7 +4576,10 @@ class TestResponsesRequestHandler:
             turn_type="standard",
         )
 
-        result = instance.format(data, extras={"body": {"tool_choice": "required"}})
+        result = instance.format(
+            data,
+            extras=GenerationRequestArguments(body={"tool_choice": "required"}),
+        )
 
         assert "tool_choice" not in result.body
         assert "tools" not in result.body
@@ -4644,7 +4857,7 @@ class TestPoolingRequestHandler:
         """
         instance = valid_instances
         data = GenerationRequest()
-        extras = {"body": {"temperature": 0.5, "top_k": 40}}
+        extras = GenerationRequestArguments(body={"temperature": 0.5, "top_k": 40})
 
         result = instance.format(data, extras=extras)
 
@@ -4868,7 +5081,7 @@ class TestEmbeddingsRequestHandler:
         """
         instance = valid_instances
         data = GenerationRequest()
-        extras = {"body": {"user": "test-user"}}
+        extras = GenerationRequestArguments(body={"user": "test-user"})
 
         result = instance.format(data, extras=extras)
 
@@ -4973,7 +5186,7 @@ class TestChatCompletionsToolChoiceOverride:
             },
             turn_type="standard",
         )
-        extras = {"body": {"tool_choice": "required"}}
+        extras = GenerationRequestArguments(body={"tool_choice": "required"})
         result = handler.format(data, extras=extras)
 
         assert result.body["tool_choice"] == "none"
@@ -4992,7 +5205,7 @@ class TestChatCompletionsToolChoiceOverride:
             },
             turn_type="client_tool_call",
         )
-        extras = {"body": {"tool_choice": "required"}}
+        extras = GenerationRequestArguments(body={"tool_choice": "required"})
         result = handler.format(data, extras=extras)
 
         assert result.body["tool_choice"] == "required"
@@ -5011,7 +5224,7 @@ class TestChatCompletionsToolChoiceOverride:
             },
             turn_type="client_tool_call",
         )
-        extras = {"body": {"tool_choice": "auto"}}
+        extras = GenerationRequestArguments(body={"tool_choice": "auto"})
         result = handler.format(data, extras=extras)
 
         assert result.body["tool_choice"] == "auto"
@@ -5089,7 +5302,18 @@ class TestChatCompletionsToolChoiceOverride:
             },
         ]
         rows = finalizer(items)
-        requests = [r[0] for r in rows]  # Extract GenerationRequest from each tuple
+        assert isinstance(rows, GenerativeConversationGraph)
+
+        def _sort_key(nid: str) -> tuple[int, int]:
+            # turn_0 before turn_0_injection before turn_1
+            if nid.endswith("_injection"):
+                base = nid[: -len("_injection")]
+                return (int(base.rsplit("_", 1)[-1]), 1)
+            return (int(nid.rsplit("_", 1)[-1]), 0)
+
+        requests = [
+            rows.nodes[nid].request for nid in sorted(rows.nodes, key=_sort_key)
+        ]
 
         assert len(requests) == 2
         tool_call_req, injection_req = requests
