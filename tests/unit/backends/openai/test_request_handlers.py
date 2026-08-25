@@ -847,6 +847,19 @@ class TestTextCompletionsRequestHandler:
         assert output_metrics.text_words == (len(text.split()) if text else 0)
         assert output_metrics.text_characters == len(text)
 
+    @pytest.mark.smoke
+    def test_extract_metrics_cached_tokens(self, valid_instances):
+        """Test extract_metrics captures prompt_tokens_details.cached_tokens."""
+        usage = {
+            "prompt_tokens": 10,
+            "prompt_tokens_details": {"cached_tokens": 8},
+            "completion_tokens": 5,
+        }
+        input_metrics, _ = valid_instances.extract_metrics(usage, "Test response")
+
+        assert input_metrics.text_tokens == 10
+        assert input_metrics.cached_tokens == 8
+
 
 class TestChatCompletionsRequestHandler:
     """Test cases for ChatCompletionsRequestHandler.
@@ -2345,6 +2358,29 @@ class TestAudioRequestHandler:
         assert file_tuple[1] == audio_data
         assert file_tuple[2] == "audio/wav"
 
+    @pytest.mark.regression
+    @pytest.mark.parametrize("file_name", [None, ""], ids=["missing", "empty"])
+    def test_format_file_upload_defaults_nonempty_file_name(
+        self,
+        valid_instances: AudioRequestHandler,
+        file_name: str | None,
+    ) -> None:
+        """Use a nonempty multipart filename when metadata has none.
+
+        ## WRITTEN BY AI ##
+        """
+        audio_entry = {
+            "audio": b"fake_audio_bytes",
+            "mimetype": "audio/wav",
+        }
+        if file_name is not None:
+            audio_entry["file_name"] = file_name
+        data = GenerationRequest(columns={"audio_column": [audio_entry]})
+
+        result = valid_instances.format(data)
+
+        assert result.files["file"][0] == "audio_input"
+
     @pytest.mark.sanity
     def test_format_missing_audio(self, valid_instances):
         """Test format method raises error when no audio column provided.
@@ -2412,6 +2448,90 @@ class TestAudioRequestHandler:
         assert result.body.get("temperature") == 0.0
 
     # Response handling tests
+    @pytest.mark.regression
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"text": "Hello world"},
+            {
+                "task": "transcribe",
+                "language": "english",
+                "duration": 1.0,
+                "text": "Hello world",
+                "segments": [],
+            },
+        ],
+    )
+    def test_compile_non_streaming_top_level_text(self, valid_instances, response):
+        """Test basic and verbose audio responses use top-level text.
+
+        ## WRITTEN BY AI ##
+        """
+        request = GenerationRequest(columns={})
+        arguments = GenerationRequestArguments(body={"model": "whisper"})
+
+        result = valid_instances.compile_non_streaming(request, arguments, response)
+
+        assert result.text == "Hello world"
+        assert result.output_metrics.text_words == 2
+        assert result.output_metrics.text_characters == 11
+        valid_instances.post_validation(result)
+
+    @pytest.mark.regression
+    def test_compile_non_streaming_preserves_usage(self, valid_instances):
+        """Test audio token usage is compiled with top-level text.
+
+        ## WRITTEN BY AI ##
+        """
+        request = GenerationRequest(columns={})
+        arguments = GenerationRequestArguments()
+        response = {
+            "id": "transcription-1",
+            "text": "Hello world",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+        }
+
+        result = valid_instances.compile_non_streaming(request, arguments, response)
+
+        assert result.response_id == "transcription-1"
+        assert result.input_metrics.audio_tokens == 10
+        assert result.output_metrics.text_tokens == 2
+
+    @pytest.mark.regression
+    def test_post_validation_accepts_empty_transcription(self, valid_instances):
+        """Test an explicitly empty transcription remains valid.
+
+        ## WRITTEN BY AI ##
+        """
+        request = GenerationRequest(columns={})
+        result = valid_instances.compile_non_streaming(
+            request,
+            GenerationRequestArguments(),
+            {"text": ""},
+        )
+
+        assert result.text == ""
+        assert result.output_metrics.text_words == 0
+        assert result.output_metrics.text_characters == 0
+        valid_instances.post_validation(result)
+
+    @pytest.mark.regression
+    def test_post_validation_rejects_missing_transcription(self, valid_instances):
+        """Test a response without top-level text remains unusable.
+
+        ## WRITTEN BY AI ##
+        """
+        request = GenerationRequest(columns={})
+        result = valid_instances.compile_non_streaming(
+            request,
+            GenerationRequestArguments(),
+            {},
+        )
+
+        assert result.text is None
+        with pytest.raises(ValueError, match="UNUSABLE_BACKEND_RESPONSE"):
+            valid_instances.post_validation(result)
+
     @pytest.mark.smoke
     @pytest.mark.parametrize(
         (
@@ -3379,6 +3499,29 @@ class TestResponsesRequestHandler:
         assert output_metrics.text_tokens == expected_output_tokens
         assert output_metrics.text_words == (len(text.split()) if text else 0)
         assert output_metrics.text_characters == len(text)
+
+    @pytest.mark.smoke
+    @pytest.mark.parametrize(
+        ("input_tokens_details", "expected_cached_tokens"),
+        [
+            ({"cached_tokens": 8}, 8),
+            ({"cached_tokens": 0}, 0),
+            ({}, None),
+            (None, None),
+        ],
+    )
+    def test_extract_metrics_cached_tokens(
+        self, valid_instances, input_tokens_details, expected_cached_tokens
+    ):
+        """Test extract_metrics captures input_tokens_details.cached_tokens."""
+        usage = {"input_tokens": 10, "output_tokens": 5}
+        if input_tokens_details is not None:
+            usage["input_tokens_details"] = input_tokens_details
+
+        input_metrics, _ = valid_instances.extract_metrics(usage, "Test response")
+
+        assert input_metrics.text_tokens == 10
+        assert input_metrics.cached_tokens == expected_cached_tokens
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(

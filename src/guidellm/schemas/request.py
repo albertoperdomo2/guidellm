@@ -123,6 +123,12 @@ class UsageMetrics(StandardBaseDict):
     text_tokens: int | None = Field(
         default=None, description="Number of text tokens processed/generated."
     )
+    cached_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Number of input tokens served from the prefix cache (KV cache hit)."
+        ),
+    )
     text_words: int | None = Field(
         default=None, description="Number of text words processed/generated."
     )
